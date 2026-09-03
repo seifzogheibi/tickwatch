@@ -1,0 +1,45 @@
+[project]
+name = "tickwatch"
+version = "0.1.0"
+description = "Live Binance market data pipeline with online anomaly detection."
+requires-python = ">=3.13"
+dependencies = [
+    "websockets>=13.0",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.6",
+    "pytest>=8.0",
+]
+
+[project.scripts]
+tickwatch = "tickwatch.consumer:main"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # bugbear
+    "UP",  # pyupgrade
+    "ASYNC",  # async pitfalls (blocking calls in coroutines etc.)
+    "RUF",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
