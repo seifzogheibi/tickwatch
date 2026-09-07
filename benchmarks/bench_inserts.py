@@ -7,8 +7,8 @@ not parsing.
 
 Usage:
     python benchmarks/bench_inserts.py \
-        --input benchmarks/data/sample-2026-10-02.jsonl.gz --runs 3 \
-        --out benchmarks/results/stage1_naive.json
+        --input benchmarks/data/sample-2026-10-02-15m.jsonl.gz \
+        --writer <writer> --batch-size 500 --runs 3 --out benchmarks/results/<name>.json
 """
 
 import argparse
@@ -31,7 +31,9 @@ from psycopg.conninfo import make_conninfo
 from tickwatch.config import load_settings
 from tickwatch.db import apply_schema
 from tickwatch.parse import DepthUpdate, Trade, parse_message
-from tickwatch.writer import NaiveWriter
+from tickwatch.writer import BatchWriter, FlushFn, NaiveWriter, flush_insert
+
+FLUSHES: dict[str, FlushFn] = {"batch-insert": flush_insert}
 
 
 def load_frames(path: Path) -> list[str]:
@@ -51,35 +53,76 @@ async def ensure_bench_db(main_dsn: str, bench_db: str) -> None:
             await conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(bench_db)))
 
 
-async def run_once(dsn: str, items: list[Trade | DepthUpdate]) -> dict:
+WRITERS = {
+    "naive": "NaiveWriter (one INSERT + COMMIT per row)",
+    "batch-insert": "BatchWriter + flush_insert (pipelined INSERT, one txn per batch)",
+}
+
+
+def _pcts(samples_ns: list[int]) -> dict:
+    # inclusive: interpolate within the observed range (exclusive can report p99 > max).
+    q = statistics.quantiles(samples_ns, n=100, method="inclusive")
+    return {
+        "p50": round(q[49] / 1e6, 3),
+        "p95": round(q[94] / 1e6, 3),
+        "p99": round(q[98] / 1e6, 3),
+        "max": round(max(samples_ns) / 1e6, 3),
+    }
+
+
+async def _replay_naive(conn: psycopg.AsyncConnection, items: list) -> dict:
+    writer = NaiveWriter(conn)
+    latencies_ns = []
+    for item in items:
+        t0 = time.perf_counter_ns()
+        await writer.write(item)
+        latencies_ns.append(time.perf_counter_ns() - t0)
+    return {"latency_ms": _pcts(latencies_ns)}
+
+
+async def _replay_batch(
+    conn: psycopg.AsyncConnection, items: list, flush: FlushFn, batch_size: int
+) -> dict:
+    flushes: list[tuple[int, float]] = []
+    writer = BatchWriter(
+        conn, flush=flush, batch_size=batch_size, on_flush=lambda n, s: flushes.append((n, s))
+    )
+    async with asyncio.TaskGroup() as tg:
+        tg.create_task(writer.run())
+        for item in items:
+            await writer.put(item)
+        await writer.close()
+    return {
+        "batch_size": batch_size,
+        "flushes": len(flushes),
+        "mean_rows_per_flush": round(sum(n for n, _ in flushes) / len(flushes), 1),
+        "flush_ms": _pcts([int(s * 1e9) for _, s in flushes]),
+    }
+
+
+async def run_once(
+    dsn: str, items: list[Trade | DepthUpdate], writer: str, batch_size: int
+) -> dict:
     async with await psycopg.AsyncConnection.connect(dsn) as conn:
         await conn.execute("TRUNCATE trades, depth_updates")
         await conn.commit()
-        writer = NaiveWriter(conn)
-        latencies_ns = []
         start = time.perf_counter_ns()
-        for item in items:
-            t0 = time.perf_counter_ns()
-            await writer.write(item)
-            latencies_ns.append(time.perf_counter_ns() - t0)
+        if writer == "naive":
+            detail = await _replay_naive(conn, items)
+        else:
+            detail = await _replay_batch(conn, items, FLUSHES[writer], batch_size)
         wall_s = (time.perf_counter_ns() - start) / 1e9
         cur = await conn.execute(
             "SELECT (SELECT count(*) FROM trades) + (SELECT count(*) FROM depth_updates)"
         )
         (stored,) = await cur.fetchone()
 
-    q = statistics.quantiles(latencies_ns, n=100)
     return {
         "rows": len(items),
         "rows_stored": stored,
         "wall_s": round(wall_s, 3),
         "rows_per_s": round(len(items) / wall_s, 1),
-        "latency_ms": {
-            "p50": round(q[49] / 1e6, 3),
-            "p95": round(q[94] / 1e6, 3),
-            "p99": round(q[98] / 1e6, 3),
-            "max": round(max(latencies_ns) / 1e6, 3),
-        },
+        **detail,
     }
 
 
@@ -134,13 +177,13 @@ async def main_async(args: argparse.Namespace) -> dict:
 
     runs = []
     for n in range(args.runs):
-        r = await run_once(dsn, items)
+        r = await run_once(dsn, items, args.writer, args.batch_size)
         print(f"run {n + 1}: {r}", flush=True)
         runs.append(r)
 
     return {
         "benchmark": "sustained inserts, replayed recording",
-        "writer": "NaiveWriter (one INSERT + COMMIT per row)",
+        "writer": WRITERS[args.writer],
         "measured_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "command": " ".join(sys.argv),
         "input": {"path": str(args.input), "sha256": sha256(args.input), "frames": len(frames)},
@@ -154,6 +197,8 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--input", type=Path, required=True)
     p.add_argument("--runs", type=int, default=3)
+    p.add_argument("--writer", choices=WRITERS, default="naive")
+    p.add_argument("--batch-size", type=int, default=500)
     p.add_argument("--out", type=Path, required=True)
     args = p.parse_args()
     result = asyncio.run(main_async(args))
