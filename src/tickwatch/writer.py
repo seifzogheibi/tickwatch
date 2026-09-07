@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+import weakref
 from collections.abc import Awaitable, Callable
 
 import psycopg
@@ -180,3 +181,84 @@ class BatchWriter:
         await self._flush_fn(self.conn, trades, depths)
         if self._on_flush is not None:
             self._on_flush(len(batch), time.perf_counter() - t0)
+
+
+def _copy_sql(table: str, columns: tuple[str, ...]) -> str:
+    return f"COPY {table} ({', '.join(columns)}) FROM STDIN"
+
+
+async def _copy_rows(cur: psycopg.AsyncCursor, sql: str, rows: list[tuple]) -> None:
+    async with cur.copy(sql) as copy:
+        for row in rows:
+            await copy.write_row(row)
+
+
+async def flush_copy_direct(
+    conn: psycopg.AsyncConnection, trades: list[Trade], depths: list[DepthUpdate]
+) -> None:
+    """COPY straight into the hypertables.
+
+    Fastest path, but COPY has no ON CONFLICT: one row we've already stored
+    aborts the whole batch. Kept as a reference point for what dedup costs,
+    not used by the consumer.
+    """
+    async with conn.transaction(), conn.cursor() as cur:
+        if trades:
+            await _copy_rows(
+                cur, _copy_sql("trades", TRADE_COLUMNS), [trade_row(t) for t in trades]
+            )
+        if depths:
+            await _copy_rows(
+                cur, _copy_sql("depth_updates", DEPTH_COLUMNS), [depth_row(d) for d in depths]
+            )
+
+
+_STAGING_DDL = """
+CREATE TEMP TABLE IF NOT EXISTS trades_staging
+    (LIKE trades INCLUDING DEFAULTS) ON COMMIT DELETE ROWS;
+CREATE TEMP TABLE IF NOT EXISTS depth_updates_staging
+    (LIKE depth_updates INCLUDING DEFAULTS) ON COMMIT DELETE ROWS;
+"""
+
+_MERGE_TRADES = f"""
+INSERT INTO trades ({", ".join(TRADE_COLUMNS)})
+SELECT {", ".join(TRADE_COLUMNS)} FROM trades_staging
+ON CONFLICT DO NOTHING
+"""
+
+_MERGE_DEPTH = f"""
+INSERT INTO depth_updates ({", ".join(DEPTH_COLUMNS)})
+SELECT {", ".join(DEPTH_COLUMNS)} FROM depth_updates_staging
+ON CONFLICT DO NOTHING
+"""
+
+# Connections whose session already has the temp staging tables.
+_staged: weakref.WeakSet[psycopg.AsyncConnection] = weakref.WeakSet()
+
+
+async def flush_copy(
+    conn: psycopg.AsyncConnection, trades: list[Trade], depths: list[DepthUpdate]
+) -> None:
+    """COPY into session-local staging tables, then INSERT ... SELECT ON CONFLICT.
+
+    Keeps COPY's cheap bulk transfer while staying idempotent like the other
+    writers. The staging tables are TEMP (no WAL) and ON COMMIT DELETE ROWS,
+    so they are empty at the start of every batch.
+    """
+    if conn not in _staged:
+        await conn.execute(_STAGING_DDL)
+        await conn.commit()
+        _staged.add(conn)
+    async with conn.transaction(), conn.cursor() as cur:
+        if trades:
+            await _copy_rows(
+                cur, _copy_sql("trades_staging", TRADE_COLUMNS), [trade_row(t) for t in trades]
+            )
+            await cur.execute(_MERGE_TRADES)
+        if depths:
+            await _copy_rows(
+                cur,
+                _copy_sql("depth_updates_staging", DEPTH_COLUMNS),
+                [depth_row(d) for d in depths],
+            )
+            await cur.execute(_MERGE_DEPTH)
