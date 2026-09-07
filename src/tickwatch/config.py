@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
+from psycopg.conninfo import make_conninfo
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,9 +33,13 @@ class Settings:
 
     @property
     def pg_dsn(self) -> str:
-        return (
-            f"host={self.pg_host} port={self.pg_port} user={self.pg_user} "
-            f"password={self.pg_password} dbname={self.pg_db}"
+        # make_conninfo quotes values, so passwords with spaces/quotes survive.
+        return make_conninfo(
+            host=self.pg_host,
+            port=self.pg_port,
+            user=self.pg_user,
+            password=self.pg_password,
+            dbname=self.pg_db,
         )
 
 
