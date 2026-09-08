@@ -31,9 +31,20 @@ from psycopg.conninfo import make_conninfo
 from tickwatch.config import load_settings
 from tickwatch.db import apply_schema
 from tickwatch.parse import DepthUpdate, Trade, parse_message
-from tickwatch.writer import BatchWriter, FlushFn, NaiveWriter, flush_insert
+from tickwatch.writer import (
+    BatchWriter,
+    FlushFn,
+    NaiveWriter,
+    flush_copy,
+    flush_copy_direct,
+    flush_insert,
+)
 
-FLUSHES: dict[str, FlushFn] = {"batch-insert": flush_insert}
+FLUSHES: dict[str, FlushFn] = {
+    "batch-insert": flush_insert,
+    "batch-copy": flush_copy,
+    "batch-copy-direct": flush_copy_direct,
+}
 
 
 def load_frames(path: Path) -> list[str]:
@@ -56,6 +67,8 @@ async def ensure_bench_db(main_dsn: str, bench_db: str) -> None:
 WRITERS = {
     "naive": "NaiveWriter (one INSERT + COMMIT per row)",
     "batch-insert": "BatchWriter + flush_insert (pipelined INSERT, one txn per batch)",
+    "batch-copy": "BatchWriter + flush_copy (COPY to temp staging, INSERT ON CONFLICT)",
+    "batch-copy-direct": "BatchWriter + flush_copy_direct (COPY into hypertables, no dedup)",
 }
 
 
