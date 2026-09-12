@@ -8,7 +8,7 @@ not parsing.
 Usage:
     python benchmarks/bench_inserts.py \
         --input benchmarks/data/sample-2026-10-02-15m.jsonl.gz \
-        --writer <writer> --batch-size 500 --runs 3 --out benchmarks/results/<name>.json
+        --writer <writer> --batch-size 2000 --runs 3 --out benchmarks/results/<name>.json
 """
 
 import argparse
@@ -211,7 +211,7 @@ def main() -> None:
     p.add_argument("--input", type=Path, required=True)
     p.add_argument("--runs", type=int, default=3)
     p.add_argument("--writer", choices=WRITERS, default="naive")
-    p.add_argument("--batch-size", type=int, default=500)
+    p.add_argument("--batch-size", type=int, default=2000)
     p.add_argument("--out", type=Path, required=True)
     args = p.parse_args()
     result = asyncio.run(main_async(args))

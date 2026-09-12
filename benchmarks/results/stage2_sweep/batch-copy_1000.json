@@ -1,0 +1,73 @@
+{
+  "benchmark": "sustained inserts, replayed recording",
+  "writer": "BatchWriter + flush_copy (COPY to temp staging, INSERT ON CONFLICT)",
+  "measured_at": "2026-10-02T17:48:11+00:00",
+  "command": "benchmarks/bench_inserts.py --input benchmarks/data/sample-2026-10-02-15m.jsonl.gz --writer batch-copy --batch-size 1000 --runs 3 --out benchmarks/results/stage2_sweep/batch-copy_1000.json",
+  "input": {
+    "path": "benchmarks/data/sample-2026-10-02-15m.jsonl.gz",
+    "sha256": "67f45613cdaa7b3326fb36f63372df1c7455ee8fc01ad4a09cc01446493ef71c",
+    "frames": 126520
+  },
+  "environment": {
+    "host_cpu": "Apple M4 Pro",
+    "host_mem_gb": 24.0,
+    "host_os": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+    "docker_cpus": "14",
+    "docker_mem_gb": 7.7,
+    "postgres": "PostgreSQL 16.15 on aarch64-unknown-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit",
+    "timescaledb": "2.30.2",
+    "synchronous_commit": "on",
+    "fsync": "on",
+    "python": "3.13.3",
+    "psycopg": "3.3.6",
+    "git_commit": "885365c"
+  },
+  "runs": [
+    {
+      "rows": 126520,
+      "rows_stored": 126520,
+      "wall_s": 2.218,
+      "rows_per_s": 57035.7,
+      "batch_size": 1000,
+      "flushes": 127,
+      "mean_rows_per_flush": 996.2,
+      "flush_ms": {
+        "p50": 17.051,
+        "p95": 21.454,
+        "p99": 26.525,
+        "max": 30.497
+      }
+    },
+    {
+      "rows": 126520,
+      "rows_stored": 126520,
+      "wall_s": 2.234,
+      "rows_per_s": 56623.8,
+      "batch_size": 1000,
+      "flushes": 127,
+      "mean_rows_per_flush": 996.2,
+      "flush_ms": {
+        "p50": 16.911,
+        "p95": 21.517,
+        "p99": 27.665,
+        "max": 40.003
+      }
+    },
+    {
+      "rows": 126520,
+      "rows_stored": 126520,
+      "wall_s": 2.214,
+      "rows_per_s": 57155.7,
+      "batch_size": 1000,
+      "flushes": 127,
+      "mean_rows_per_flush": 996.2,
+      "flush_ms": {
+        "p50": 16.965,
+        "p95": 20.465,
+        "p99": 23.836,
+        "max": 30.107
+      }
+    }
+  ],
+  "median_rows_per_s": 57035.7
+}

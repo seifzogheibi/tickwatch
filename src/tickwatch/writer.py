@@ -127,7 +127,7 @@ class BatchWriter:
         self,
         conn: psycopg.AsyncConnection,
         flush: FlushFn = flush_insert,
-        batch_size: int = 500,
+        batch_size: int = 2000,
         max_delay_s: float = 0.2,
         queue_size: int = 10_000,
         on_flush: Callable[[int, float], None] | None = None,
