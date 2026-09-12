@@ -1,0 +1,64 @@
+{
+  "benchmark": "sustained inserts, replayed recording",
+  "writer": "NaiveWriter (one INSERT + COMMIT per row)",
+  "measured_at": "2026-10-02T17:46:42+00:00",
+  "command": "benchmarks/bench_inserts.py --input benchmarks/data/sample-2026-10-02-15m.jsonl.gz --writer naive --batch-size 500 --runs 3 --out benchmarks/results/stage2_naive.json",
+  "input": {
+    "path": "benchmarks/data/sample-2026-10-02-15m.jsonl.gz",
+    "sha256": "67f45613cdaa7b3326fb36f63372df1c7455ee8fc01ad4a09cc01446493ef71c",
+    "frames": 126520
+  },
+  "environment": {
+    "host_cpu": "Apple M4 Pro",
+    "host_mem_gb": 24.0,
+    "host_os": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+    "docker_cpus": "14",
+    "docker_mem_gb": 7.7,
+    "postgres": "PostgreSQL 16.15 on aarch64-unknown-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit",
+    "timescaledb": "2.30.2",
+    "synchronous_commit": "on",
+    "fsync": "on",
+    "python": "3.13.3",
+    "psycopg": "3.3.6",
+    "git_commit": "885365c"
+  },
+  "runs": [
+    {
+      "rows": 126520,
+      "rows_stored": 126520,
+      "wall_s": 104.379,
+      "rows_per_s": 1212.1,
+      "latency_ms": {
+        "p50": 0.812,
+        "p95": 0.987,
+        "p99": 1.178,
+        "max": 11.178
+      }
+    },
+    {
+      "rows": 126520,
+      "rows_stored": 126520,
+      "wall_s": 106.392,
+      "rows_per_s": 1189.2,
+      "latency_ms": {
+        "p50": 0.827,
+        "p95": 0.982,
+        "p99": 1.164,
+        "max": 9.599
+      }
+    },
+    {
+      "rows": 126520,
+      "rows_stored": 126520,
+      "wall_s": 106.067,
+      "rows_per_s": 1192.8,
+      "latency_ms": {
+        "p50": 0.82,
+        "p95": 1.039,
+        "p99": 1.324,
+        "max": 25.233
+      }
+    }
+  ],
+  "median_rows_per_s": 1192.8
+}
