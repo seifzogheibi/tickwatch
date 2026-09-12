@@ -1,0 +1,14 @@
+Unique  (cost=41.02..9656.32 rows=200 width=24) (actual time=12.488..26.534 rows=2 loops=1)
+  Buffers: shared hit=2502, temp read=265 written=266
+  ->  Incremental Sort  (cost=41.02..9400.97 rows=102141 width=24) (actual time=12.487..22.959 rows=102206 loops=1)
+        Sort Key: _hyper_1_1_chunk.symbol, _hyper_1_1_chunk."time" DESC
+        Presorted Key: _hyper_1_1_chunk.symbol
+        Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 28kB  Peak Memory: 28kB
+        Pre-sorted Groups: 2  Sort Method: external merge  Average Disk: 2120kB  Peak Disk: 2120kB
+        Buffers: shared hit=2502, temp read=265 written=266
+        ->  Index Scan using "1_trades_pkey" on _hyper_1_1_chunk  (cost=0.42..3525.73 rows=102141 width=24) (actual time=0.010..7.705 rows=102206 loops=1)
+              Buffers: shared hit=2502
+Planning:
+  Buffers: shared hit=9
+Planning Time: 0.105 ms
+Execution Time: 26.716 ms
