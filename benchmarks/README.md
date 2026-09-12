@@ -27,7 +27,8 @@ Input: `data/sample-2026-10-02-15m.jsonl.gz` -- 15 minutes of btcusdt + ethusdt,
 | One `INSERT` + `COMMIT` per row (Stage 1) | 1 | **1,193** | 1x | 0.83 / 1.16 ms per row | [`stage2_naive`](results/stage2_naive.json) |
 | Pipelined `INSERT ... ON CONFLICT`, one txn per batch | 500 | 20,551 | 17x | 23.9 / 31.6 ms per flush | [`stage2_batch-insert`](results/stage2_batch-insert.json) |
 | `COPY` to temp staging + `INSERT ... ON CONFLICT` | 500 | 47,098 | 40x | 10.6 / 20.7 ms per flush | [`stage2_batch-copy`](results/stage2_batch-copy.json) |
-| **Same, at the chosen batch size (live config)** | **2000** | **69,133** | **58x** | 28.4 / 35.1 ms per flush | [`batch-copy_2000`](results/stage2_sweep/batch-copy_2000.json) |
+| Same, at the chosen batch size | 2000 | 69,133 | 58x | 28.4 / 35.1 ms per flush | [`batch-copy_2000`](results/stage2_sweep/batch-copy_2000.json) |
+| **Same + `(symbol, time DESC)` index (current live config)** | **2000** | **61,340** | **51x** | 31.5 / 40.7 ms per flush | [`..._with_symbol_time_idx`](results/stage2_batch-copy_2000_with_symbol_time_idx.json) |
 | `COPY` direct, no dedup (reference only) | 500 | 83,226 | 70x | 5.7 / 14.6 ms per flush | [`stage2_batch-copy-direct`](results/stage2_batch-copy-direct.json) |
 
 Run-to-run spread (max - min, as % of median) was 0.6-5.4% for the rows
@@ -47,6 +48,8 @@ the figure above.
    parses and plans one statement per row on the server. `COPY` streams rows
    in a single command with no per-row statement overhead.
 3. **Batch size (40x -> 58x).** See the sweep below.
+4. **Extra index (58x -> 51x).** The query index added below costs 11% of
+   write throughput; see [Query: latest trade per symbol](#query-latest-trade-per-symbol).
 
 **What idempotency costs.** `COPY` has no `ON CONFLICT`, so one row we
 already stored (e.g. resent after a reconnect) would abort the whole batch.
@@ -71,7 +74,46 @@ Throughput rises steeply to ~1000 and flattens after 2000; going to 5000 buys
 rates the 200 ms time bound flushes long before a batch fills, so batch size
 only matters when the writer has a backlog to clear.
 
-### Environment
+## Query: latest trade per symbol
+
+```sql
+SELECT DISTINCT ON (symbol) symbol, time, price FROM trades ORDER BY symbol, time DESC;
+```
+
+A "last price" panel or the anomaly detector asks this constantly.
+`explain_query.py` warms the cache, then takes the median server-side
+`Execution Time` from 20 runs of `EXPLAIN (ANALYZE, BUFFERS)` against the live
+database. Full plans are saved next to each result.
+
+| | Index | Rows in `trades` | Median | Buffers | Plan | Result |
+|---|---|---:|---:|---:|---|---|
+| Before | PK `(symbol, trade_id, time)`, `(time DESC)` | 102,194 | **26.4 ms** | 2,502 + disk spill | [`before.txt`](results/stage2_query_before.txt) | [`.json`](results/stage2_query_before.json) |
+| After | + `(symbol, time DESC)` | 103,459 | **0.018 ms** | 8 | [`after.txt`](results/stage2_query_after.txt) | [`.json`](results/stage2_query_after.json) |
+
+**Reading the "before" plan.** To return 2 rows, Postgres walks the primary
+key, which leads with `symbol` but then orders by `trade_id`, not `time`. So it
+reads all ~102k rows and sorts each symbol's rows by time. The sort exceeds
+`work_mem` and spills to disk (`Sort Method: external merge`). Cost grows
+linearly with the table, and this table only grows.
+
+**The fix.** An index on `(symbol, time DESC)` holds each symbol's rows
+newest-first, so TimescaleDB's `SkipScan` probes the index once per distinct
+symbol: 8 buffer hits, regardless of table size. Below ~0.1 ms the timing is
+close to timer resolution, so the buffer count (2,502 -> 8) is the more
+robust comparison than the ~1,450x time ratio.
+
+**What it costs.** One more index to maintain on every insert: batched COPY at
+batch 2000 fell from 69,133 to 61,340 rows/s (-11%), median flush 28.4 -> 31.5
+ms. Live load uses under 2% of that capacity, so it's an easy trade.
+
+**Alternative tested and rejected.** Binance trade IDs increase with time per
+symbol, so `ORDER BY symbol, trade_id DESC` looked like it might reuse the
+primary key with no new index. It doesn't: the planner still reads all rows
+(103,459) and spills a sort to disk -- 34.7 ms in a single `EXPLAIN ANALYZE`,
+no SkipScan. It would also tie correctness to an exchange implementation
+detail.
+
+## Environment
 
 Measured 2026-10-02 on an Apple M4 Pro (24 GB), Postgres 16.15 + TimescaleDB
 2.30.2 in Docker Desktop (14 CPUs, 7.7 GB), `synchronous_commit=on`, single
