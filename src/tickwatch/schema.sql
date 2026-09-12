@@ -22,6 +22,12 @@ CREATE TABLE IF NOT EXISTS trades (
 
 SELECT create_hypertable('trades', by_range('time', INTERVAL '1 day'), if_not_exists => TRUE);
 
+-- Per-symbol, newest-first. Serves "latest trade per symbol" (DISTINCT ON
+-- symbol) via TimescaleDB SkipScan: one index probe per symbol instead of
+-- reading and sorting the whole table. The PK leads with symbol too, but it
+-- orders by trade_id, so it can't return rows newest-first by time.
+CREATE INDEX IF NOT EXISTS trades_symbol_time_idx ON trades (symbol, time DESC);
+
 -- One row per diff-depth message. Bid/ask changes stay together as JSONB
 -- arrays of [price, qty] strings: the message, not the price level, is the
 -- unit we reason about (U/u sequencing, gap detection).
