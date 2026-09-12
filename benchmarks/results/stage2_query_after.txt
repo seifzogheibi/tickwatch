@@ -1,0 +1,10 @@
+Unique  (cost=0.29..0.65 rows=200 width=24) (actual time=0.007..0.011 rows=2 loops=1)
+  Buffers: shared hit=8
+  ->  Custom Scan (SkipScan) on _hyper_1_1_chunk  (cost=0.29..0.64 rows=2 width=24) (actual time=0.007..0.010 rows=2 loops=1)
+        Buffers: shared hit=8
+        ->  Index Scan using _hyper_1_1_chunk_trades_symbol_time_idx on _hyper_1_1_chunk  (cost=0.29..2879.33 rows=103517 width=24) (actual time=0.003..0.003 rows=1 loops=3)
+              Buffers: shared hit=8
+Planning:
+  Buffers: shared hit=9
+Planning Time: 0.041 ms
+Execution Time: 0.014 ms

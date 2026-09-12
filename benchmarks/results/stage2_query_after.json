@@ -1,0 +1,20 @@
+{
+  "label": "after: (symbol, time DESC) index",
+  "measured_at": "2026-10-02T17:50:14+00:00",
+  "git_commit": "4172354",
+  "query": "SELECT DISTINCT ON (symbol) symbol, time, price FROM trades ORDER BY symbol, time DESC",
+  "trades_rows": 103459,
+  "trades_size": "17 MB",
+  "trades_chunks": 1,
+  "indexes": [
+    "CREATE UNIQUE INDEX trades_pkey ON public.trades USING btree (symbol, trade_id, \"time\")",
+    "CREATE INDEX trades_symbol_time_idx ON public.trades USING btree (symbol, \"time\" DESC)",
+    "CREATE INDEX trades_time_idx ON public.trades USING btree (\"time\" DESC)"
+  ],
+  "runs": 20,
+  "execution_ms": {
+    "median": 0.018,
+    "min": 0.013,
+    "max": 0.032
+  }
+}
