@@ -43,3 +43,17 @@ CREATE TABLE IF NOT EXISTS depth_updates (
 );
 
 SELECT create_hypertable('depth_updates', by_range('time', INTERVAL '1 day'), if_not_exists => TRUE);
+
+-- One row per break in a symbol's depth-update sequence (see gaps.py).
+-- Low volume, so a plain table rather than a hypertable.
+CREATE TABLE IF NOT EXISTS depth_gaps (
+    time                  timestamptz NOT NULL,
+    symbol                text        NOT NULL,
+    prev_final_update_id  bigint      NOT NULL,
+    first_update_id       bigint      NOT NULL,
+    missing_update_ids    bigint      NOT NULL,
+    cause                 text        NOT NULL CHECK (cause IN ('stream', 'reconnect')),
+    received_at           timestamptz NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS depth_gaps_symbol_time_idx ON depth_gaps (symbol, time DESC);

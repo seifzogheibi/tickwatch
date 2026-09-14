@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 import psycopg
 from psycopg.types.json import Jsonb
 
+from tickwatch.gaps import Gap
 from tickwatch.parse import DepthUpdate, Trade
 
 TRADE_COLUMNS = (
@@ -42,6 +43,22 @@ INSERT_DEPTH = f"""
 INSERT INTO depth_updates ({", ".join(DEPTH_COLUMNS)})
 VALUES ({", ".join(["%s"] * len(DEPTH_COLUMNS))})
 ON CONFLICT DO NOTHING
+"""
+
+
+GAP_COLUMNS = (
+    "time",
+    "symbol",
+    "prev_final_update_id",
+    "first_update_id",
+    "missing_update_ids",
+    "cause",
+    "received_at",
+)
+
+INSERT_GAP = f"""
+INSERT INTO depth_gaps ({", ".join(GAP_COLUMNS)})
+VALUES ({", ".join(["%s"] * len(GAP_COLUMNS))})
 """
 
 
@@ -90,7 +107,7 @@ class NaiveWriter:
         await self.conn.commit()
 
 
-type Item = Trade | DepthUpdate
+type Item = Trade | DepthUpdate | Gap
 type FlushFn = Callable[[psycopg.AsyncConnection, list[Trade], list[DepthUpdate]], Awaitable[None]]
 
 
@@ -177,8 +194,28 @@ class BatchWriter:
     async def _flush(self, batch: list[Item]) -> None:
         trades = [i for i in batch if isinstance(i, Trade)]
         depths = [i for i in batch if isinstance(i, DepthUpdate)]
+        gaps = [i for i in batch if isinstance(i, Gap)]
         t0 = time.perf_counter()
-        await self._flush_fn(self.conn, trades, depths)
+        if trades or depths:
+            await self._flush_fn(self.conn, trades, depths)
+        if gaps:
+            # Rare (a handful a day), so a plain INSERT in its own transaction.
+            async with self.conn.transaction(), self.conn.cursor() as cur:
+                await cur.executemany(
+                    INSERT_GAP,
+                    [
+                        (
+                            g.time,
+                            g.symbol,
+                            g.prev_final_update_id,
+                            g.first_update_id,
+                            g.missing_update_ids,
+                            g.cause,
+                            g.received_at,
+                        )
+                        for g in gaps
+                    ],
+                )
         if self._on_flush is not None:
             self._on_flush(len(batch), time.perf_counter() - t0)
 
