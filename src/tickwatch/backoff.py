@@ -21,7 +21,9 @@ class Backoff:
         self._rng = rng or random.Random()
 
     def next_delay(self) -> float:
-        ceiling = min(self.cap_s, self.base_s * 2**self.attempt)
+        # Clamp the exponent: 2**n as a float overflows past n ~ 1024, which a
+        # long outage at the 60 s cap would reach in ~17 hours.
+        ceiling = min(self.cap_s, self.base_s * 2 ** min(self.attempt, 32))
         self.attempt += 1
         return self._rng.uniform(0, ceiling)
 
