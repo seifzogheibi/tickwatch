@@ -2,6 +2,7 @@
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from dotenv import load_dotenv
 from psycopg.conninfo import make_conninfo
@@ -12,6 +13,7 @@ class Settings:
     binance_ws_base: str
     symbols: tuple[str, ...]
     depth_interval_ms: int
+    raw_dir: Path
     pg_host: str
     pg_port: int
     pg_user: str
@@ -54,6 +56,7 @@ def load_settings() -> Settings:
         binance_ws_base=os.environ.get("BINANCE_WS_BASE", "wss://stream.binance.com:9443"),
         symbols=symbols,
         depth_interval_ms=int(os.environ.get("DEPTH_INTERVAL_MS", "100")),
+        raw_dir=Path(os.environ.get("RAW_DIR", "data/raw")),
         pg_host=os.environ.get("PGHOST", "localhost"),
         pg_port=int(os.environ.get("PGPORT", "5432")),
         pg_user=os.environ.get("PGUSER", "tickwatch"),
