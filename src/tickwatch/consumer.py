@@ -28,6 +28,10 @@ log = logging.getLogger("tickwatch.consumer")
 LOG_EVERY_S = 10.0
 # A connection that has stayed up this long resets the backoff schedule.
 HEALTHY_AFTER_S = 60.0
+# Binance doesn't answer a client's CLOSE frame, so websockets would wait its
+# default 10 s close_timeout on every shutdown -- as long as Docker's stop grace
+# period. Measured 2026-10-02: CLOSE sent, EOF only after exactly 10.0 s.
+CLOSE_TIMEOUT_S = 2.0
 # Errors that mean "the connection is gone, try again", as opposed to bugs.
 CONNECTION_ERRORS = (websockets.WebSocketException, OSError, TimeoutError)
 
@@ -60,7 +64,7 @@ async def read_stream(
         was_connected = False
         try:
             log.info("connecting to %s", settings.ws_url)
-            async with websockets.connect(settings.ws_url) as ws:
+            async with websockets.connect(settings.ws_url, close_timeout=CLOSE_TIMEOUT_S) as ws:
                 log.info("connected")
                 if connected_once:
                     detector.mark_reconnect()
