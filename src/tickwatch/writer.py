@@ -59,6 +59,7 @@ GAP_COLUMNS = (
 INSERT_GAP = f"""
 INSERT INTO depth_gaps ({", ".join(GAP_COLUMNS)})
 VALUES ({", ".join(["%s"] * len(GAP_COLUMNS))})
+ON CONFLICT DO NOTHING
 """
 
 

@@ -57,3 +57,8 @@ CREATE TABLE IF NOT EXISTS depth_gaps (
 );
 
 CREATE INDEX IF NOT EXISTS depth_gaps_symbol_time_idx ON depth_gaps (symbol, time DESC);
+
+-- A gap is identified by the two IDs it sits between. Unique so that
+-- replaying an archive (or re-delivery) never records the same gap twice.
+CREATE UNIQUE INDEX IF NOT EXISTS depth_gaps_identity_idx
+    ON depth_gaps (symbol, prev_final_update_id, first_update_id);
