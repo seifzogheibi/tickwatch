@@ -8,6 +8,7 @@ every connection after 24 hours regardless.
 
 import asyncio
 import logging
+import signal
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -131,13 +132,39 @@ async def run() -> None:
     stats = Stats()
     archive = RawArchive(settings.raw_dir)
     archive.compress_stale()
-    async with await connect(settings) as conn:
-        writer = BatchWriter(conn, flush=flush_copy, on_flush=stats.on_flush)
-        async with asyncio.TaskGroup() as tg:
-            tg.create_task(writer.run())
-            tg.create_task(report(writer, stats))
-            tg.create_task(archive.flush_periodically())
-            tg.create_task(read_stream(settings, writer, archive, stats))
+
+    # SIGTERM (docker stop, systemd) and Ctrl-C both mean "stop cleanly":
+    # stop reading, flush what's queued, close the archive.
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, stop.set)
+
+    try:
+        async with await connect(settings) as conn:
+            writer = BatchWriter(conn, flush=flush_copy, on_flush=stats.on_flush)
+            async with asyncio.TaskGroup() as tg:
+                writer_task = tg.create_task(writer.run())
+                others = [
+                    tg.create_task(report(writer, stats)),
+                    tg.create_task(archive.flush_periodically()),
+                    tg.create_task(read_stream(settings, writer, archive, stats)),
+                ]
+                await stop.wait()
+                log.info("stopping: flushing %d queued items", writer.queue.qsize())
+                for t in others:
+                    t.cancel()
+                await writer.close()
+                await writer_task
+    finally:
+        await archive.close()
+    log.info(
+        "stopped cleanly: disconnects=%d reconnect_attempts=%d gaps=%d parse_errors=%d",
+        stats.disconnects,
+        stats.reconnect_attempts,
+        stats.gaps,
+        stats.parse_errors,
+    )
 
 
 def main() -> None:
