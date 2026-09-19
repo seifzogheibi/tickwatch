@@ -5,9 +5,13 @@ Layout: <root>/YYYY-MM-DD/HH.tsv (UTC hour of receipt), one frame per line:
     <received_at as integer ns since epoch>\\t<frame exactly as received>
 
 Binance frames are compact single-line JSON, so tab and newline never occur
-unescaped inside one. When the hour rolls over, the finished file is gzipped
-in a worker thread. Writes are buffered and flushed every `flush_every_s`,
-so a hard crash can lose at most that much of the archive.
+unescaped inside one. Lines whose payload starts with "#" are markers written
+by tickwatch itself, not frames -- currently only CONNECTED_MARKER, written
+each time a websocket connection is established.
+
+When the hour rolls over, the finished file is gzipped in a worker thread.
+Writes are buffered and flushed every `flush_every_s`, so a hard crash can
+lose at most that much of the archive.
 """
 
 import asyncio
@@ -19,6 +23,8 @@ from pathlib import Path
 from typing import TextIO
 
 log = logging.getLogger("tickwatch.archive")
+
+CONNECTED_MARKER = "#connected"
 
 
 def _hour_path(root: Path, t: datetime) -> Path:

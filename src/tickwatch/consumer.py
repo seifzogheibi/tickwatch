@@ -10,7 +10,6 @@ import asyncio
 import logging
 import signal
 import time
-from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import websockets
@@ -19,8 +18,7 @@ from tickwatch.archive import RawArchive
 from tickwatch.backoff import Backoff
 from tickwatch.config import Settings, load_settings
 from tickwatch.db import connect
-from tickwatch.gaps import GapDetector
-from tickwatch.parse import DepthUpdate, parse_message
+from tickwatch.pipeline import Pipeline, Stats
 from tickwatch.writer import BatchWriter, flush_copy
 
 log = logging.getLogger("tickwatch.consumer")
@@ -36,67 +34,23 @@ CLOSE_TIMEOUT_S = 2.0
 CONNECTION_ERRORS = (websockets.WebSocketException, OSError, TimeoutError)
 
 
-@dataclass
-class Stats:
-    rows: int = 0  # rows flushed since the last report
-    flushes: int = 0
-    disconnects: int = 0  # established connections lost, cumulative
-    reconnect_attempts: int = 0  # includes failed attempts during an outage
-    gaps: int = 0
-    parse_errors: int = 0
-
-    def on_flush(self, rows: int, _seconds: float) -> None:
-        self.rows += rows
-        self.flushes += 1
-
-
 async def read_stream(
-    settings: Settings,
-    writer: BatchWriter,
-    archive: RawArchive,
-    stats: Stats,
-    backoff: Backoff | None = None,
+    settings: Settings, pipeline: Pipeline, stats: Stats, backoff: Backoff | None = None
 ) -> None:
     backoff = backoff or Backoff()
-    detector = GapDetector()
-    connected_once = False
     while True:
         was_connected = False
         try:
             log.info("connecting to %s", settings.ws_url)
             async with websockets.connect(settings.ws_url, close_timeout=CLOSE_TIMEOUT_S) as ws:
                 log.info("connected")
-                if connected_once:
-                    detector.mark_reconnect()
-                connected_once = True
+                pipeline.on_connected(datetime.now(UTC))
                 connected_at = time.monotonic()
                 # Set once a connection is up, so the except/close paths below
                 # count a lost connection once, not once per failed retry.
                 was_connected = True
                 async for raw in ws:
-                    received_at = datetime.now(UTC)
-                    archive.write(received_at, raw)
-                    try:
-                        item = parse_message(raw, received_at)
-                    except (ValueError, KeyError, TypeError):
-                        # The frame is already archived; skip it rather than
-                        # take the pipeline down over one malformed message.
-                        stats.parse_errors += 1
-                        log.exception("unparseable frame: %.200r", raw)
-                        continue
-                    if isinstance(item, DepthUpdate) and (gap := detector.check(item)):
-                        stats.gaps += 1
-                        log.warning(
-                            "depth gap %s cause=%s missing_update_ids=%d (u=%d -> U=%d)",
-                            gap.symbol,
-                            gap.cause,
-                            gap.missing_update_ids,
-                            gap.prev_final_update_id,
-                            gap.first_update_id,
-                        )
-                        await writer.put(gap)
-                    if item is not None:
-                        await writer.put(item)
+                    await pipeline.on_frame(datetime.now(UTC), raw)
                     if backoff.attempt and time.monotonic() - connected_at > HEALTHY_AFTER_S:
                         backoff.reset()
             log.warning("connection closed by server")
@@ -152,7 +106,7 @@ async def run() -> None:
                 others = [
                     tg.create_task(report(writer, stats)),
                     tg.create_task(archive.flush_periodically()),
-                    tg.create_task(read_stream(settings, writer, archive, stats)),
+                    tg.create_task(read_stream(settings, Pipeline(writer, stats, archive), stats)),
                 ]
                 await stop.wait()
                 log.info("stopping: flushing %d queued items", writer.queue.qsize())
