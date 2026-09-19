@@ -23,9 +23,10 @@ unscheduled drops would still need a REST order-book snapshot to resync.
 
 If a flush fails (Postgres down or restarting), `BatchWriter.run` raises and
 the TaskGroup stops the whole consumer. Tested 2026-10-02 by stopping the
-database container: `psycopg.errors.AdminShutdown`, exit code 1, ~2 s later. Reconnect logic covers the websocket
-only. Frames received up to the crash are in the raw archive, so the data
-isn't lost and can be replayed in, but live ingestion stops until restarted.
+database container: `psycopg.errors.AdminShutdown`, exit code 1, ~2 s later.
+Reconnect logic covers the websocket only. Frames received up to the crash
+are in the raw archive, so the data isn't lost and can be replayed in, but
+live ingestion stops until restarted.
 
 **Fix:** retry flushes with backoff while the bounded queue absorbs the
 backlog; once it is full, backpressure stalls the socket (and Binance will
@@ -35,8 +36,7 @@ eventually drop us, which the reconnect path already handles).
 
 At 2026-10-02 rates the archive grows ~150 MB/hour uncompressed for two
 symbols (37 MB per 15 minutes of recording); gzip cuts that ~10x, to roughly
-350 MB/day. Volatile markets will be higher. Nothing
-deletes old hours yet.
+350 MB/day. Volatile markets will be higher. Nothing deletes old hours yet.
 
 ## Up to ~1 s of archive can be lost on a hard crash
 
