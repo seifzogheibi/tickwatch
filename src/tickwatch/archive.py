@@ -18,6 +18,7 @@ import asyncio
 import gzip
 import logging
 import shutil
+from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TextIO
@@ -97,3 +98,43 @@ class RawArchive:
             self._file = None
         if self._compressions:
             await asyncio.gather(*self._compressions, return_exceptions=True)
+
+
+def _archive_files(paths: Iterable[Path]) -> list[Path]:
+    files = []
+    for p in paths:
+        if p.is_dir():
+            files.extend(p.rglob("*.tsv"))
+            files.extend(p.rglob("*.tsv.gz"))
+        else:
+            files.append(p)
+
+    # Order by (date dir, hour) regardless of compression: 09.tsv.gz < 10.tsv.
+    def key(f: Path) -> tuple[str, str]:
+        return (f.parent.name, f.name.split(".")[0])
+
+    return sorted(set(files), key=key)
+
+
+def _parse_ns(ns: int) -> datetime:
+    # Integer arithmetic: a float timestamp would lose the microseconds.
+    seconds, rem = divmod(ns, 1_000_000_000)
+    return datetime.fromtimestamp(seconds, UTC).replace(microsecond=rem // 1000)
+
+
+def iter_archive(paths: Iterable[Path]) -> Iterator[tuple[datetime, str]]:
+    """Yield (received_at, payload) for every line of the given files/dirs, in order.
+
+    A payload is a raw frame or a "#" marker. Lines that aren't
+    '<digits>\\t<payload>' -- e.g. a line cut short by a hard crash -- are
+    logged and skipped.
+    """
+    for f in _archive_files(paths):
+        opener = gzip.open if f.suffix == ".gz" else open
+        with opener(f, "rt", encoding="utf-8") as fh:
+            for lineno, line in enumerate(fh, 1):
+                ns, sep, payload = line.rstrip("\n").partition("\t")
+                if not sep or not ns.isdigit() or not payload:
+                    log.warning("skipping malformed archive line %s:%d", f, lineno)
+                    continue
+                yield _parse_ns(int(ns)), payload

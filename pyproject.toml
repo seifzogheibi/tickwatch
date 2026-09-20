@@ -17,6 +17,7 @@ dev = [
 
 [project.scripts]
 tickwatch = "tickwatch.consumer:main"
+tickwatch-replay = "tickwatch.replay:main"
 
 [build-system]
 requires = ["setuptools>=69"]
