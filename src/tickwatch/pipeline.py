@@ -11,7 +11,7 @@ from datetime import datetime
 
 from tickwatch.archive import CONNECTED_MARKER, RawArchive
 from tickwatch.gaps import GapDetector
-from tickwatch.parse import DepthUpdate, parse_message
+from tickwatch.parse import PARSE_ERRORS, DepthUpdate, parse_message
 from tickwatch.writer import BatchWriter
 
 log = logging.getLogger("tickwatch.pipeline")
@@ -58,7 +58,7 @@ class Pipeline:
             self.archive.write(received_at, raw)
         try:
             item = parse_message(raw, received_at)
-        except (ValueError, KeyError, TypeError):
+        except PARSE_ERRORS:
             # The frame is already archived; skip it rather than take the
             # pipeline down over one malformed message.
             self.stats.parse_errors += 1

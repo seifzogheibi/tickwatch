@@ -3,7 +3,7 @@
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +27,13 @@ class DepthUpdate:
     bids: list[list[str]]  # [[price, qty], ...]; qty "0" removes the level
     asks: list[list[str]]
     received_at: datetime
+
+
+# Everything parse_message raises on a malformed frame: bad JSON
+# (ValueError), missing fields (KeyError), wrong shapes (TypeError), and
+# non-numeric prices/quantities (decimal.InvalidOperation, which is an
+# ArithmeticError, not a ValueError). Callers that skip bad frames catch this.
+PARSE_ERRORS = (ValueError, KeyError, TypeError, InvalidOperation)
 
 
 def _ms(ts: int) -> datetime:
