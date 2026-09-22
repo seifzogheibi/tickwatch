@@ -48,3 +48,6 @@ select = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: needs the compose Postgres running; skipped if unavailable",
+]
