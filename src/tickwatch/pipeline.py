@@ -11,7 +11,7 @@ from datetime import datetime
 
 from tickwatch.archive import CONNECTED_MARKER, RawArchive
 from tickwatch.gaps import GapDetector
-from tickwatch.parse import PARSE_ERRORS, DepthUpdate, parse_message
+from tickwatch.parse import PARSE_ERRORS, DepthUpdate, Trade, parse_message
 from tickwatch.writer import BatchWriter
 
 log = logging.getLogger("tickwatch.pipeline")
@@ -75,5 +75,7 @@ class Pipeline:
                 gap.first_update_id,
             )
             await self.writer.put(gap)
-        if item is not None:
+        if isinstance(item, Trade | DepthUpdate):
+            # Quotes (BookTicker) aren't stored row-by-row: ~90/s for two
+            # symbols, and the raw archive already keeps every one.
             await self.writer.put(item)

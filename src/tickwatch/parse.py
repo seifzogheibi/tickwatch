@@ -29,6 +29,20 @@ class DepthUpdate:
     received_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class BookTicker:
+    """Best bid/ask after a change. Binance sends no event time for these, so
+    received_at is the only timestamp."""
+
+    symbol: str
+    update_id: int  # u: order book update ID
+    bid: Decimal
+    bid_qty: Decimal
+    ask: Decimal
+    ask_qty: Decimal
+    received_at: datetime
+
+
 # Everything parse_message raises on a malformed frame: bad JSON
 # (ValueError), missing fields (KeyError), wrong shapes (TypeError), and
 # non-numeric prices/quantities (decimal.InvalidOperation, which is an
@@ -40,9 +54,23 @@ def _ms(ts: int) -> datetime:
     return datetime.fromtimestamp(ts / 1000, tz=UTC)
 
 
-def parse_message(raw: str | bytes, received_at: datetime) -> Trade | DepthUpdate | None:
-    """Parse one combined-stream frame. Returns None for event types we don't store."""
-    data = json.loads(raw)["data"]
+def parse_message(
+    raw: str | bytes, received_at: datetime
+) -> Trade | DepthUpdate | BookTicker | None:
+    """Parse one combined-stream frame. Returns None for event types we don't use."""
+    msg = json.loads(raw)
+    data = msg["data"]
+    # bookTicker payloads have no "e" field; the stream name identifies them.
+    if msg["stream"].endswith("@bookTicker"):
+        return BookTicker(
+            symbol=data["s"],
+            update_id=data["u"],
+            bid=Decimal(data["b"]),
+            bid_qty=Decimal(data["B"]),
+            ask=Decimal(data["a"]),
+            ask_qty=Decimal(data["A"]),
+            received_at=received_at,
+        )
     match data["e"]:
         case "trade":
             return Trade(

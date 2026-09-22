@@ -5,9 +5,9 @@ from decimal import Decimal
 import pytest
 
 from tickwatch.archive import iter_archive
-from tickwatch.parse import PARSE_ERRORS, DepthUpdate, Trade, parse_message
+from tickwatch.parse import PARSE_ERRORS, BookTicker, DepthUpdate, Trade, parse_message
 
-from .helpers import ARCHIVE, DEPTH_FRAME, TRADE_FRAME
+from .helpers import ARCHIVE, BOOK_TICKER_FRAME, DEPTH_FRAME, TRADE_FRAME
 
 RECEIVED = datetime(2026, 10, 2, 12, 0, tzinfo=UTC)
 
@@ -39,6 +39,18 @@ def test_depth_update_fields() -> None:
     # Levels stay as exchange strings; qty "0" (level removed) is preserved.
     assert d.bids == [["2678.74000000", "1.20000000"], ["2678.50000000", "0.00000000"]]
     assert d.asks == [["2678.75000000", "3.10000000"]]
+
+
+def test_book_ticker_has_no_event_time_so_uses_received_at() -> None:
+    assert parse_message(BOOK_TICKER_FRAME, RECEIVED) == BookTicker(
+        symbol="ETHUSDT",
+        update_id=81710919467,
+        bid=Decimal("2666.62000000"),
+        bid_qty=Decimal("26.30990000"),
+        ask=Decimal("2666.63000000"),
+        ask_qty=Decimal("3.48060000"),
+        received_at=RECEIVED,
+    )
 
 
 def test_accepts_bytes() -> None:

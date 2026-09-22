@@ -22,11 +22,12 @@ class Settings:
 
     @property
     def streams(self) -> list[str]:
-        """Combined-stream names: one trade and one diff-depth stream per symbol."""
+        """Combined-stream names: trades, diff depth and best bid/ask per symbol."""
         out = []
         for s in self.symbols:
             out.append(f"{s}@trade")
             out.append(f"{s}@depth@{self.depth_interval_ms}ms")
+            out.append(f"{s}@bookTicker")
         return out
 
     @property
