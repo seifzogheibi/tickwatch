@@ -109,7 +109,9 @@ def _archive_files(paths: Iterable[Path]) -> list[Path]:
         else:
             files.append(p)
 
-    # Order by (date dir, hour) regardless of compression: 09.tsv.gz < 10.tsv.
+    # Chronological by (date dir, hour) even across different roots, e.g. an
+    # archive copied off a server alongside a local one; sorting full paths
+    # would group by root instead.
     def key(f: Path) -> tuple[str, str]:
         return (f.parent.name, f.name.split(".")[0])
 
@@ -117,7 +119,9 @@ def _archive_files(paths: Iterable[Path]) -> list[Path]:
 
 
 def _parse_ns(ns: int) -> datetime:
-    # Integer arithmetic: a float timestamp would lose the microseconds.
+    # Integer arithmetic is exact by construction. (ns / 1e9 also round-trips
+    # microseconds at current epochs -- checked on 1M random timestamps,
+    # 2020-2040 -- but only because fromtimestamp rounds to the nearest us.)
     seconds, rem = divmod(ns, 1_000_000_000)
     return datetime.fromtimestamp(seconds, UTC).replace(microsecond=rem // 1000)
 
