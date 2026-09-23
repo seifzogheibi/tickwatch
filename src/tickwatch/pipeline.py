@@ -10,8 +10,9 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from tickwatch.archive import CONNECTED_MARKER, RawArchive
+from tickwatch.features import FeatureBuilder
 from tickwatch.gaps import GapDetector
-from tickwatch.parse import PARSE_ERRORS, DepthUpdate, Trade, parse_message
+from tickwatch.parse import PARSE_ERRORS, BookTicker, DepthUpdate, Trade, parse_message
 from tickwatch.writer import BatchWriter
 
 log = logging.getLogger("tickwatch.pipeline")
@@ -41,6 +42,7 @@ class Pipeline:
         # Live passes the archive; replay doesn't (its input *is* the archive).
         self.archive = archive
         self.detector = GapDetector()
+        self.features = FeatureBuilder()
         self._connected_once = False
 
     def on_connected(self, at: datetime) -> None:
@@ -75,6 +77,9 @@ class Pipeline:
                 gap.first_update_id,
             )
             await self.writer.put(gap)
+        if isinstance(item, Trade | BookTicker):
+            for f in self.features.on_event(item):
+                await self.writer.put(f)
         if isinstance(item, Trade | DepthUpdate):
             # Quotes (BookTicker) aren't stored row-by-row: ~90/s for two
             # symbols, and the raw archive already keeps every one.

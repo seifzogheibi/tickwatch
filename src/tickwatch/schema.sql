@@ -62,3 +62,19 @@ CREATE INDEX IF NOT EXISTS depth_gaps_symbol_time_idx ON depth_gaps (symbol, tim
 -- replaying an archive (or re-delivery) never records the same gap twice.
 CREATE UNIQUE INDEX IF NOT EXISTS depth_gaps_identity_idx
     ON depth_gaps (symbol, prev_final_update_id, first_update_id);
+
+-- Per-symbol, per-second market features (features.py), the detectors' input.
+-- Bucketed by receive time; see features.py for why.
+CREATE TABLE IF NOT EXISTS features_1s (
+    time            timestamptz       NOT NULL,
+    symbol          text              NOT NULL,
+    trade_count     integer           NOT NULL,
+    volume          double precision  NOT NULL,
+    notional        double precision  NOT NULL,
+    spread_bps      double precision,
+    mid             double precision,
+    abs_return_bps  double precision,
+    PRIMARY KEY (symbol, time)
+);
+
+SELECT create_hypertable('features_1s', by_range('time', INTERVAL '7 days'), if_not_exists => TRUE);

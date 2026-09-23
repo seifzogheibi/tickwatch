@@ -30,6 +30,7 @@ TABLES = [
     "trades ORDER BY symbol, trade_id",
     "depth_updates ORDER BY symbol, final_update_id",
     "depth_gaps ORDER BY symbol, first_update_id",
+    "features_1s ORDER BY symbol, time",
 ]
 
 

@@ -1,6 +1,7 @@
 """Persist parsed records to Postgres."""
 
 import asyncio
+import dataclasses
 import time
 import weakref
 from collections.abc import Awaitable, Callable
@@ -8,6 +9,7 @@ from collections.abc import Awaitable, Callable
 import psycopg
 from psycopg.types.json import Jsonb
 
+from tickwatch.features import Features
 from tickwatch.gaps import Gap
 from tickwatch.parse import DepthUpdate, Trade
 
@@ -46,21 +48,24 @@ ON CONFLICT DO NOTHING
 """
 
 
-GAP_COLUMNS = (
-    "time",
-    "symbol",
-    "prev_final_update_id",
-    "first_update_id",
-    "missing_update_ids",
-    "cause",
-    "received_at",
-)
+# Low-volume tables (a few rows per second at most), written with a plain
+# INSERT in their own transaction after the bulk COPY. Each item type maps to
+# a table whose columns are the dataclass's fields, in order.
+LOW_VOLUME_TABLES: dict[type, str] = {
+    Gap: "depth_gaps",
+    Features: "features_1s",
+}
 
-INSERT_GAP = f"""
-INSERT INTO depth_gaps ({", ".join(GAP_COLUMNS)})
-VALUES ({", ".join(["%s"] * len(GAP_COLUMNS))})
-ON CONFLICT DO NOTHING
-"""
+
+def _insert_sql(table: str, columns: list[str]) -> str:
+    return (
+        f"INSERT INTO {table} ({', '.join(columns)}) "
+        f"VALUES ({', '.join(['%s'] * len(columns))}) ON CONFLICT DO NOTHING"
+    )
+
+
+def _adapt(value: object) -> object:
+    return Jsonb(value) if isinstance(value, dict | list) else value
 
 
 def trade_row(t: Trade) -> tuple:
@@ -108,7 +113,7 @@ class NaiveWriter:
         await self.conn.commit()
 
 
-type Item = Trade | DepthUpdate | Gap
+type Item = Trade | DepthUpdate | Gap | Features
 type FlushFn = Callable[[psycopg.AsyncConnection, list[Trade], list[DepthUpdate]], Awaitable[None]]
 
 
@@ -195,28 +200,21 @@ class BatchWriter:
     async def _flush(self, batch: list[Item]) -> None:
         trades = [i for i in batch if isinstance(i, Trade)]
         depths = [i for i in batch if isinstance(i, DepthUpdate)]
-        gaps = [i for i in batch if isinstance(i, Gap)]
+        low_volume: dict[type, list] = {}
+        for i in batch:
+            if type(i) in LOW_VOLUME_TABLES:
+                low_volume.setdefault(type(i), []).append(i)
         t0 = time.perf_counter()
         if trades or depths:
             await self._flush_fn(self.conn, trades, depths)
-        if gaps:
-            # Rare (a handful a day), so a plain INSERT in its own transaction.
+        if low_volume:
             async with self.conn.transaction(), self.conn.cursor() as cur:
-                await cur.executemany(
-                    INSERT_GAP,
-                    [
-                        (
-                            g.time,
-                            g.symbol,
-                            g.prev_final_update_id,
-                            g.first_update_id,
-                            g.missing_update_ids,
-                            g.cause,
-                            g.received_at,
-                        )
-                        for g in gaps
-                    ],
-                )
+                for cls, items in low_volume.items():
+                    columns = [f.name for f in dataclasses.fields(cls)]
+                    await cur.executemany(
+                        _insert_sql(LOW_VOLUME_TABLES[cls], columns),
+                        [tuple(_adapt(getattr(i, c)) for c in columns) for i in items],
+                    )
         if self._on_flush is not None:
             self._on_flush(len(batch), time.perf_counter() - t0)
 
