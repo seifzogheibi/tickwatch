@@ -6,10 +6,11 @@ code that processed the data live. Only the source of frames differs.
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from tickwatch.archive import CONNECTED_MARKER, RawArchive
+from tickwatch.detectors import IsolationForestDetector, ZScoreDetector
 from tickwatch.features import FeatureBuilder
 from tickwatch.gaps import GapDetector
 from tickwatch.parse import PARSE_ERRORS, BookTicker, DepthUpdate, Trade, parse_message
@@ -22,6 +23,7 @@ log = logging.getLogger("tickwatch.pipeline")
 class Stats:
     rows: int = 0  # rows flushed since the last report
     flushes: int = 0
+    flags: dict[str, int] = field(default_factory=dict)  # cumulative, per detector
     frames: int = 0  # cumulative frames handled
     disconnects: int = 0  # established connections lost, cumulative
     reconnect_attempts: int = 0  # includes failed attempts during an outage
@@ -43,6 +45,7 @@ class Pipeline:
         self.archive = archive
         self.detector = GapDetector()
         self.features = FeatureBuilder()
+        self.detectors = [ZScoreDetector(), IsolationForestDetector()]
         self._connected_once = False
 
     def on_connected(self, at: datetime) -> None:
@@ -80,6 +83,10 @@ class Pipeline:
         if isinstance(item, Trade | BookTicker):
             for f in self.features.on_event(item):
                 await self.writer.put(f)
+                for detector in self.detectors:
+                    if flag := await detector.score(f):
+                        self.stats.flags[flag.detector] = self.stats.flags.get(flag.detector, 0) + 1
+                        await self.writer.put(flag)
         if isinstance(item, Trade | DepthUpdate):
             # Quotes (BookTicker) aren't stored row-by-row: ~90/s for two
             # symbols, and the raw archive already keeps every one.

@@ -71,7 +71,7 @@ async def report(writer: BatchWriter, stats: Stats) -> None:
         now = time.monotonic()
         log.info(
             "wrote %d rows in %d flushes (%.1f rows/s), queue=%d, "
-            "disconnects=%d reconnect_attempts=%d gaps=%d parse_errors=%d",
+            "disconnects=%d reconnect_attempts=%d gaps=%d parse_errors=%d flags=%s",
             stats.rows,
             stats.flushes,
             stats.rows / (now - last),
@@ -80,6 +80,7 @@ async def report(writer: BatchWriter, stats: Stats) -> None:
             stats.reconnect_attempts,
             stats.gaps,
             stats.parse_errors,
+            stats.flags,
         )
         stats.rows = stats.flushes = 0
         last = now

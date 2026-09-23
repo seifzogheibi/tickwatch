@@ -78,3 +78,17 @@ CREATE TABLE IF NOT EXISTS features_1s (
 );
 
 SELECT create_hypertable('features_1s', by_range('time', INTERVAL '7 days'), if_not_exists => TRUE);
+
+-- One row per bucket a detector flagged (detectors.py). `features` holds the
+-- detector's input vector at flag time, plus per-feature z for zscore.
+CREATE TABLE IF NOT EXISTS anomaly_flags (
+    time       timestamptz       NOT NULL,
+    symbol     text              NOT NULL,
+    detector   text              NOT NULL,
+    score      double precision  NOT NULL,
+    threshold  double precision  NOT NULL,
+    features   jsonb             NOT NULL,
+    PRIMARY KEY (symbol, detector, time)
+);
+
+SELECT create_hypertable('anomaly_flags', by_range('time', INTERVAL '30 days'), if_not_exists => TRUE);

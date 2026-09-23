@@ -52,7 +52,7 @@ def main() -> None:
     elapsed = time.perf_counter() - t0
     log.info(
         "replayed %d frames in %.1fs (%.0f frames/s): %d rows submitted in %d flushes "
-        "(duplicates skipped), gaps=%d parse_errors=%d",
+        "(duplicates skipped), gaps=%d parse_errors=%d flags=%s",
         stats.frames,
         elapsed,
         stats.frames / elapsed if elapsed else 0,
@@ -60,6 +60,7 @@ def main() -> None:
         stats.flushes,
         stats.gaps,
         stats.parse_errors,
+        stats.flags,
     )
 
 

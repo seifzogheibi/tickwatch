@@ -31,6 +31,7 @@ TABLES = [
     "depth_updates ORDER BY symbol, final_update_id",
     "depth_gaps ORDER BY symbol, first_update_id",
     "features_1s ORDER BY symbol, time",
+    "anomaly_flags ORDER BY symbol, detector, time",
 ]
 
 

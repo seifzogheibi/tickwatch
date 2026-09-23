@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable
 import psycopg
 from psycopg.types.json import Jsonb
 
+from tickwatch.detectors import Flag
 from tickwatch.features import Features
 from tickwatch.gaps import Gap
 from tickwatch.parse import DepthUpdate, Trade
@@ -54,6 +55,7 @@ ON CONFLICT DO NOTHING
 LOW_VOLUME_TABLES: dict[type, str] = {
     Gap: "depth_gaps",
     Features: "features_1s",
+    Flag: "anomaly_flags",
 }
 
 
@@ -113,7 +115,7 @@ class NaiveWriter:
         await self.conn.commit()
 
 
-type Item = Trade | DepthUpdate | Gap | Features
+type Item = Trade | DepthUpdate | Gap | Features | Flag
 type FlushFn = Callable[[psycopg.AsyncConnection, list[Trade], list[DepthUpdate]], Awaitable[None]]
 
 
