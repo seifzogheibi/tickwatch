@@ -13,7 +13,9 @@ import time
 from datetime import UTC, datetime
 
 import websockets
+from prometheus_client import start_http_server
 
+from tickwatch import metrics
 from tickwatch.archive import RawArchive
 from tickwatch.backoff import Backoff
 from tickwatch.config import Settings, load_settings
@@ -44,21 +46,27 @@ async def read_stream(
             log.info("connecting to %s", settings.ws_url)
             async with websockets.connect(settings.ws_url, close_timeout=CLOSE_TIMEOUT_S) as ws:
                 log.info("connected")
+                metrics.CONNECTED.set(1)
                 pipeline.on_connected(datetime.now(UTC))
                 connected_at = time.monotonic()
                 # Set once a connection is up, so the except/close paths below
                 # count a lost connection once, not once per failed retry.
                 was_connected = True
                 async for raw in ws:
-                    await pipeline.on_frame(datetime.now(UTC), raw)
+                    received_at = datetime.now(UTC)
+                    metrics.LAST_FRAME.set(received_at.timestamp())
+                    await pipeline.on_frame(received_at, raw)
                     if backoff.attempt and time.monotonic() - connected_at > HEALTHY_AFTER_S:
                         backoff.reset()
             log.warning("connection closed by server")
         except CONNECTION_ERRORS as e:
             log.warning("connection lost: %s: %s", type(e).__name__, e)
+        metrics.CONNECTED.set(0)
         if was_connected:
             stats.disconnects += 1
+            metrics.DISCONNECTS.inc()
         stats.reconnect_attempts += 1
+        metrics.RECONNECT_ATTEMPTS.inc()
         delay = backoff.next_delay()
         log.info("reconnect attempt #%d in %.1fs", stats.reconnect_attempts, delay)
         await asyncio.sleep(delay)
@@ -102,6 +110,11 @@ async def run() -> None:
     try:
         async with await connect(settings) as conn:
             writer = BatchWriter(conn, flush=flush_copy, on_flush=stats.on_flush)
+            metrics.QUEUE_DEPTH.set_function(writer.queue.qsize)
+            start_http_server(settings.metrics_port, addr=settings.metrics_addr)
+            log.info(
+                "metrics on http://%s:%d/metrics", settings.metrics_addr, settings.metrics_port
+            )
             async with asyncio.TaskGroup() as tg:
                 writer_task = tg.create_task(writer.run())
                 others = [

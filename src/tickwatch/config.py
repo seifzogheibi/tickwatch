@@ -14,6 +14,8 @@ class Settings:
     symbols: tuple[str, ...]
     depth_interval_ms: int
     raw_dir: Path
+    metrics_addr: str
+    metrics_port: int
     pg_host: str
     pg_port: int
     pg_user: str
@@ -58,6 +60,8 @@ def load_settings() -> Settings:
         symbols=symbols,
         depth_interval_ms=int(os.environ.get("DEPTH_INTERVAL_MS", "100")),
         raw_dir=Path(os.environ.get("RAW_DIR", "data/raw")),
+        metrics_addr=os.environ.get("METRICS_ADDR", "127.0.0.1"),
+        metrics_port=int(os.environ.get("METRICS_PORT", "8000")),
         pg_host=os.environ.get("PGHOST", "localhost"),
         pg_port=int(os.environ.get("PGPORT", "5432")),
         pg_user=os.environ.get("PGUSER", "tickwatch"),

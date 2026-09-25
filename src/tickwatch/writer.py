@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable
 import psycopg
 from psycopg.types.json import Jsonb
 
+from tickwatch import metrics
 from tickwatch.detectors import Flag
 from tickwatch.features import Features
 from tickwatch.gaps import Gap
@@ -217,8 +218,11 @@ class BatchWriter:
                         _insert_sql(LOW_VOLUME_TABLES[cls], columns),
                         [tuple(_adapt(getattr(i, c)) for c in columns) for i in items],
                     )
+        elapsed = time.perf_counter() - t0
+        metrics.FLUSH_SECONDS.observe(elapsed)
+        metrics.ROWS_WRITTEN.inc(len(batch))
         if self._on_flush is not None:
-            self._on_flush(len(batch), time.perf_counter() - t0)
+            self._on_flush(len(batch), elapsed)
 
 
 def _copy_sql(table: str, columns: tuple[str, ...]) -> str:

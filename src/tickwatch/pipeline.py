@@ -6,9 +6,11 @@ code that processed the data live. Only the source of frames differs.
 """
 
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from tickwatch import metrics
 from tickwatch.archive import CONNECTED_MARKER, RawArchive
 from tickwatch.detectors import IsolationForestDetector, ZScoreDetector
 from tickwatch.features import FeatureBuilder
@@ -17,6 +19,8 @@ from tickwatch.parse import PARSE_ERRORS, BookTicker, DepthUpdate, Trade, parse_
 from tickwatch.writer import BatchWriter
 
 log = logging.getLogger("tickwatch.pipeline")
+
+_STREAM_LABEL = {Trade: "trade", DepthUpdate: "depth", BookTicker: "bookticker"}
 
 
 @dataclass
@@ -67,10 +71,14 @@ class Pipeline:
             # The frame is already archived; skip it rather than take the
             # pipeline down over one malformed message.
             self.stats.parse_errors += 1
+            metrics.PARSE_ERRORS.inc()
+            metrics.FRAMES.labels("other").inc()
             log.exception("unparseable frame: %.200r", raw)
             return
+        metrics.FRAMES.labels(_STREAM_LABEL.get(type(item), "other")).inc()
         if isinstance(item, DepthUpdate) and (gap := self.detector.check(item)):
             self.stats.gaps += 1
+            metrics.GAPS.labels(gap.symbol, gap.cause).inc()
             log.warning(
                 "depth gap %s cause=%s missing_update_ids=%d (u=%d -> U=%d)",
                 gap.symbol,
@@ -84,8 +92,12 @@ class Pipeline:
             for f in self.features.on_event(item):
                 await self.writer.put(f)
                 for detector in self.detectors:
-                    if flag := await detector.score(f):
+                    t0 = time.perf_counter()
+                    flag = await detector.score(f)
+                    metrics.DETECTOR_SECONDS.labels(detector.name).observe(time.perf_counter() - t0)
+                    if flag:
                         self.stats.flags[flag.detector] = self.stats.flags.get(flag.detector, 0) + 1
+                        metrics.FLAGS.labels(flag.symbol, flag.detector).inc()
                         await self.writer.put(flag)
         if isinstance(item, Trade | DepthUpdate):
             # Quotes (BookTicker) aren't stored row-by-row: ~90/s for two
