@@ -4,6 +4,5 @@ global:
 
 scrape_configs:
   - job_name: tickwatch
-    # The consumer runs on the host for now (Stage 7 moves it into compose).
     static_configs:
-      - targets: ["host.docker.internal:8000"]
+      - targets: ["consumer:8000"]
