@@ -19,27 +19,47 @@ mark, run both until the new one's sequence overlaps the old one's, then drop
 the old connection and dedupe by update ID. That removes the scheduled gap;
 unscheduled drops would still need a REST order-book snapshot to resync.
 
-## A database outage stops the consumer
+## A database outage stops ingestion, including the archive
 
 If a flush fails (Postgres down or restarting), `BatchWriter.run` raises and
-the TaskGroup stops the whole consumer. Tested 2026-10-02 by stopping the
-database container: `psycopg.errors.AdminShutdown`, exit code 1, ~2 s later.
-Reconnect logic covers the websocket only. Frames received up to the crash
-are in the raw archive, so the data isn't lost and can be replayed in, but
-live ingestion stops until restarted.
+the TaskGroup stops the whole consumer (`psycopg.errors.AdminShutdown`, exit
+code 1, ~2 s later). Under Compose, Docker restarts it: a database restart
+now costs ~5 s (tested 2026-10-03). But for as long as the database stays
+down, the consumer crash-loops and *receives nothing* -- the raw archive
+stops too, so the window is unrecoverable. That is what turned a Docker VM
+failure into a 15-minute hole on 2026-10-02 (`incidents/`).
 
 **Fix:** retry flushes with backoff while the bounded queue absorbs the
-backlog; once it is full, backpressure stalls the socket (and Binance will
-eventually drop us, which the reconnect path already handles).
+backlog, and keep archiving regardless of database health so the window can
+be replayed in afterwards.
 
 ## Raw archive has no retention
 
-At 2026-10-02 rates the archive grows ~150 MB/hour uncompressed for two
-symbols (37 MB per 15 minutes of recording); gzip cuts that ~10x, to roughly
-350 MB/day. Volatile markets will be higher. Nothing deletes old hours yet.
+With trades, depth and quotes for two symbols, measured at 01:31 UTC on
+2026-10-03 (a quiet night): ~127 MB/hour uncompressed, 3.0 GB/day; gzip cuts
+it 9.2x, to ~330 MB/day. Busier markets will be higher. Nothing deletes old
+hours yet.
 
 ## Up to ~1 s of archive can be lost on a hard crash
 
 Archive writes are buffered and flushed every second. A clean shutdown
 (SIGTERM/SIGINT) flushes everything; `kill -9`, a kernel panic or power loss
 can lose the last second.
+
+## Detector state is lost on every restart
+
+Both detectors keep their state in memory: the z-score's 5-minute window and
+the Isolation Forest's model. After any restart the z-score is silent for 60 s
+and the forest for 1 hour (3,630 scoreable buckets) while they rebuild. The
+replay harness sidesteps this for analysis -- it rebuilds state from the
+archive -- but live flags have holes after each restart.
+
+**Fix:** persist the forest model and z-score window on shutdown (or rebuild
+them at startup by replaying the last hour of archive).
+
+## Not deployed
+
+So far it has run only on a development laptop, which slept for 2 h 14 min
+on 2026-10-02 (`incidents/2026-10-02-laptop-sleep.md`). The Compose setup is
+ready for an always-on host (`deploy.md`) but has not been run on one, and the
+benchmarks in `benchmarks/` are from Docker Desktop on a Mac.
