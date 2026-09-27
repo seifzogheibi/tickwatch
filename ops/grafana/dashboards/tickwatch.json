@@ -119,7 +119,8 @@
                 }
               }
             }
-          ]
+          ],
+          "decimals": 0
         },
         "overrides": []
       },
@@ -307,7 +308,8 @@
           },
           "color": {
             "mode": "thresholds"
-          }
+          },
+          "decimals": 0
         },
         "overrides": []
       },
@@ -367,7 +369,8 @@
           },
           "color": {
             "mode": "thresholds"
-          }
+          },
+          "decimals": 0
         },
         "overrides": []
       },
@@ -427,7 +430,8 @@
           },
           "color": {
             "mode": "thresholds"
-          }
+          },
+          "decimals": 0
         },
         "overrides": []
       },

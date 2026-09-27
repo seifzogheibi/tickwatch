@@ -46,6 +46,8 @@ def panel(kind: str, title: str, pos: tuple[int, int, int, int], targets: list[d
         defaults["color"] = {"mode": "thresholds"}
     if mappings:
         defaults["mappings"] = mappings
+    if kind == "stat" and unit == "short":
+        defaults["decimals"] = 0  # counts: increase() extrapolates, so 1.00 -> 1
     if kind == "stat":
         # "last", not Grafana's default "lastNotNull": a dead series must not
         # keep showing its final healthy value. Instant queries for the same reason.
