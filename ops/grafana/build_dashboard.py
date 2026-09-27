@@ -46,6 +46,12 @@ def panel(kind: str, title: str, pos: tuple[int, int, int, int], targets: list[d
         defaults["color"] = {"mode": "thresholds"}
     if mappings:
         defaults["mappings"] = mappings
+    if kind == "stat":
+        # "last", not Grafana's default "lastNotNull": a dead series must not
+        # keep showing its final healthy value. Instant queries for the same reason.
+        options = {"reduceOptions": {"calcs": ["last"], "fields": "", "values": False},
+                   **(options or {})}  # fmt: skip
+        targets = [{**t, "instant": True, "range": False} for t in targets]
     return {
         "id": next(_next_id),
         "type": kind,
@@ -89,12 +95,17 @@ MSG_S = "suffix: msg/s"
 def build() -> dict:
     panels = [
         row("Health", 0),
-        panel("stat", "Websocket", (0, 1, 4, 4), [prom("tickwatch_connected")],
+        panel("stat", "Websocket", (0, 1, 4, 4),
+              # DOWN if the consumer reports disconnected *or* can't be scraped.
+              [prom('(max(tickwatch_connected) * max(up{job="tickwatch"})) or vector(0)')],
               mappings=[{"type": "value", "options": {
                   "0": {"text": "DOWN", "color": RED}, "1": {"text": "UP", "color": GREEN}}}],
               thresholds=[{"color": RED, "value": None}, {"color": GREEN, "value": 1}]),
         panel("stat", "Seconds since last frame", (4, 1, 4, 4),
-              [prom("time() - tickwatch_last_frame_timestamp_seconds")], unit="s",
+              # max_over_time keeps the last timestamp after the consumer
+              # stops being scraped, so this keeps rising instead of freezing.
+              [prom("time() - max(max_over_time(tickwatch_last_frame_timestamp_seconds[1h]))")],
+              unit="s",
               description="Catches a silent stall that the connection flag would miss. "
                           "Reads 0-5 s when healthy: Prometheus scrapes every 5 s.",
               thresholds=[{"color": GREEN, "value": None}, {"color": AMBER, "value": 15},
@@ -108,7 +119,7 @@ def build() -> dict:
               thresholds=[{"color": GREEN, "value": None}, {"color": AMBER, "value": 1000},
                           {"color": RED, "value": 8000}]),
         panel("stat", "Disconnects (24h)", (16, 1, 4, 4),
-              [prom("increase(tickwatch_disconnects_total[24h])")],
+              [prom("sum(increase(tickwatch_disconnects_total[24h])) or vector(0)")],
               description="Binance closes every connection after 24 h, so ~1/day is normal.",
               thresholds=[{"color": GREEN, "value": None}, {"color": AMBER, "value": 3}]),
         panel("stat", "Depth gaps (24h)", (20, 1, 4, 4),
