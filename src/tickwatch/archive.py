@@ -16,6 +16,8 @@ lose at most that much of the archive.
 
 import asyncio
 import gzip
+import heapq
+import itertools
 import logging
 import shutil
 from collections.abc import Iterable, Iterator
@@ -100,6 +102,10 @@ class RawArchive:
             await asyncio.gather(*self._compressions, return_exceptions=True)
 
 
+def _hour_key(f: Path) -> tuple[str, str]:
+    return (f.parent.name, f.name.split(".")[0])  # (YYYY-MM-DD, HH)
+
+
 def _archive_files(paths: Iterable[Path]) -> list[Path]:
     files = []
     for p in paths:
@@ -108,14 +114,8 @@ def _archive_files(paths: Iterable[Path]) -> list[Path]:
             files.extend(p.rglob("*.tsv.gz"))
         else:
             files.append(p)
-
-    # Chronological by (date dir, hour) even across different roots, e.g. an
-    # archive copied off a server alongside a local one; sorting full paths
-    # would group by root instead.
-    def key(f: Path) -> tuple[str, str]:
-        return (f.parent.name, f.name.split(".")[0])
-
-    return sorted(set(files), key=key)
+    # By (date, hour) across all roots, then path so ties are deterministic.
+    return sorted(set(files), key=lambda f: (*_hour_key(f), str(f)))
 
 
 def _parse_ns(ns: int) -> datetime:
@@ -126,19 +126,31 @@ def _parse_ns(ns: int) -> datetime:
     return datetime.fromtimestamp(seconds, UTC).replace(microsecond=rem // 1000)
 
 
+def _read_lines(f: Path) -> Iterator[tuple[int, str]]:
+    opener = gzip.open if f.suffix == ".gz" else open
+    with opener(f, "rt", encoding="utf-8") as fh:
+        for lineno, line in enumerate(fh, 1):
+            ns, sep, payload = line.rstrip("\n").partition("\t")
+            if not sep or not ns.isdigit() or not payload:
+                log.warning("skipping malformed archive line %s:%d", f, lineno)
+                continue
+            yield int(ns), payload
+
+
 def iter_archive(paths: Iterable[Path]) -> Iterator[tuple[datetime, str]]:
-    """Yield (received_at, payload) for every line of the given files/dirs, in order.
+    """Yield (received_at, payload) for every line of the given files/dirs, in time order.
 
     A payload is a raw frame or a "#" marker. Lines that aren't
     '<digits>\\t<payload>' -- e.g. a line cut short by a hard crash -- are
     logged and skipped.
+
+    Several roots can hold the same hour: e.g. 01.tsv written on the host
+    until a cutover and 01.tsv in a container volume after it. Files for the
+    same hour are therefore merged line by line on receive time rather than
+    concatenated, so replay never sees time run backwards. Only one hour's
+    files are open at a time.
     """
-    for f in _archive_files(paths):
-        opener = gzip.open if f.suffix == ".gz" else open
-        with opener(f, "rt", encoding="utf-8") as fh:
-            for lineno, line in enumerate(fh, 1):
-                ns, sep, payload = line.rstrip("\n").partition("\t")
-                if not sep or not ns.isdigit() or not payload:
-                    log.warning("skipping malformed archive line %s:%d", f, lineno)
-                    continue
-                yield _parse_ns(int(ns)), payload
+    for _, group in itertools.groupby(_archive_files(paths), key=_hour_key):
+        streams = [_read_lines(f) for f in group]
+        for ns, payload in heapq.merge(*streams, key=lambda r: r[0]):
+            yield _parse_ns(ns), payload

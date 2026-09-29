@@ -83,3 +83,20 @@ def test_multiple_roots_are_read_chronologically(tmp_path: Path) -> None:
     write_all(local, [(T, '{"day":2}')])
     write_all(copied, [(T - timedelta(days=1), '{"day":1}')])
     assert [p for _, p in iter_archive([local, copied])] == ['{"day":1}', '{"day":2}']
+
+
+def test_same_hour_in_two_roots_is_merged_by_time(tmp_path: Path) -> None:
+    # Regression, 2026-10-03: the host archive held 01:00-01:11 in 01.tsv and
+    # the container volume 01:12 onwards, also in 01.tsv. Concatenating
+    # same-hour files in arbitrary order replayed time backwards. Root names
+    # here sort opposite to time, and the second file interleaves the first.
+    t = datetime(2026, 10, 3, 1, 0, tzinfo=UTC)
+    host, volume = tmp_path / "b_host", tmp_path / "a_volume"
+    write_all(host, [(t, '{"n":1}'), (t + timedelta(minutes=5), '{"n":3}')])
+    write_all(
+        volume, [(t + timedelta(minutes=2), '{"n":2}'), (t + timedelta(minutes=12), '{"n":4}')]
+    )
+    replayed = list(iter_archive([host, volume]))
+    assert [p for _, p in replayed] == ['{"n":1}', '{"n":2}', '{"n":3}', '{"n":4}']
+    times = [ts for ts, _ in replayed]
+    assert times == sorted(times)
