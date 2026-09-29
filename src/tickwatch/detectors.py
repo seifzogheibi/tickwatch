@@ -67,8 +67,12 @@ class ZScoreDetector:
         self.min_samples = min_samples
         self.threshold = threshold
         self._history: dict[str, deque[np.ndarray]] = {}
+        # Score of the most recent bucket (None if it wasn't scored), flagged or
+        # not -- for offline analysis, which needs every score, not just flags.
+        self.last_score: float | None = None
 
     async def score(self, f: Features) -> Flag | None:
+        self.last_score = None
         x = vector(f)
         if x is None:
             return None
@@ -84,6 +88,7 @@ class ZScoreDetector:
             std[SPREAD] = max(std[SPREAD], 0.5 * float(np.median(past[:, SPREAD])))
             z = np.divide(x - mean, std, out=np.zeros_like(x), where=std > 0)
             score = float(np.max(np.abs(z)))
+            self.last_score = score
             if score > self.threshold:
                 flag = Flag(
                     time=f.time,
@@ -149,8 +154,11 @@ class IsolationForestDetector:
         self.n_estimators = n_estimators
         self.seed = seed
         self._state: dict[str, _ForestState] = {}
+        self.last_score: float | None = None  # see ZScoreDetector.last_score
+        self.last_threshold: float | None = None
 
     async def score(self, f: Features) -> Flag | None:
+        self.last_score = self.last_threshold = None
         x = vector(f)
         if x is None:
             return None
@@ -165,6 +173,7 @@ class IsolationForestDetector:
         flag = None
         if st.model is not None:
             score = float(-st.model.score_samples(x.reshape(1, -1))[0])
+            self.last_score, self.last_threshold = score, st.threshold
             if score > st.threshold:
                 flag = Flag(
                     time=f.time,

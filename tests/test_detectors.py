@@ -159,3 +159,22 @@ def test_forest_is_deterministic() -> None:
         return [(f.time, round(f.score, 12)) for f in run(forest(), buckets)]
 
     assert flags_for_seed_data() == flags_for_seed_data()
+
+
+def test_last_score_is_reported_for_unflagged_buckets_too() -> None:
+    rng = random.Random(0)
+    z, forest_ = ZScoreDetector(), forest()
+    scores: list[tuple] = []
+
+    async def go() -> None:
+        for i in range(400):
+            b = noisy(i, rng)
+            zf, ff = await z.score(b), await forest_.score(b)
+            scores.append((z.last_score, zf, forest_.last_score, ff))
+
+    asyncio.run(go())
+    assert all(zs is None for zs, *_ in scores[:60])  # warm-up: not scored
+    assert all(zs is not None for zs, *_ in scores[60:])
+    assert all(fs is not None for *_, fs, _ in scores[309:])  # forest live from 310th
+    # A flag is raised exactly when the reported score beats the threshold.
+    assert all((zf is not None) == (zs > 4) for zs, zf, *_ in scores[60:])
