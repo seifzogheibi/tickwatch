@@ -1,36 +1,70 @@
 """Compare the z-score and Isolation Forest detectors over the same buckets.
 
-Reads features_1s and anomaly_flags from the configured database (typically
-a scratch DB filled by `tickwatch-replay`, so the result is reproducible from
-the archive) and prints a Markdown report:
+Re-runs both detectors over features_1s (they're deterministic, so this
+reproduces exactly what the pipeline did -- checked against anomaly_flags)
+to get every bucket's score, not just the flagged ones. That separates two
+questions that flag counts alone conflate:
 
-  - the window where *both* detectors were able to flag (the forest only
-    starts after its first model swaps in)
-  - per symbol: flag counts, rates, overlap (same bucket and within +-2 s)
-  - which feature drove each z-score flag
-  - where each detector's disagreements sit in the feature distribution
-  - the strongest examples of each kind of disagreement
+  1. At their production thresholds, how often does each fire, and on which
+     seconds? (Largely a question of threshold calibration.)
+  2. If both flagged the same number of seconds, would they pick the same
+     ones? (A question about the methods.)
+
+Reads the configured database -- normally a scratch DB filled by
+`tickwatch-replay`, so the result is reproducible from the archive.
 
 Usage: PGDATABASE=tickwatch_replay python analysis/compare_detectors.py > report.md
 """
 
-import argparse
+import asyncio
 import math
+import subprocess
 from collections import Counter
-from datetime import timedelta
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 import numpy as np
 import psycopg
+from scipy.stats import spearmanr
 
 from tickwatch.config import load_settings
-from tickwatch.detectors import FEATURE_NAMES, IsolationForestDetector, vector
+from tickwatch.detectors import FEATURE_NAMES, IsolationForestDetector, ZScoreDetector, vector
 from tickwatch.features import Features
 
 NEAR = timedelta(seconds=2)
-_FOREST = IsolationForestDetector()
-# The forest scores its first bucket once the first fit (started at bucket
-# train_window) swaps in, swap_after buckets later.
-FOREST_FIRST_SCORED = _FOREST.train_window + _FOREST.swap_after
+MATCHED_RATES = (0.001, 0.01)
+
+
+@dataclass
+class Scored:
+    time: datetime
+    x: np.ndarray
+    z: float  # max |z|
+    z_flag: bool
+    f: float  # forest anomaly score
+    f_thr: float
+    f_flag: bool
+
+
+async def rescore(feats: list[Features]) -> list[Scored]:
+    """Run both detectors exactly as the pipeline does; keep buckets both scored."""
+    z, forest = ZScoreDetector(), IsolationForestDetector()
+    out = []
+    for f in feats:
+        zf, ff = await z.score(f), await forest.score(f)
+        if z.last_score is not None and forest.last_score is not None:
+            out.append(
+                Scored(
+                    f.time,
+                    vector(f),
+                    z.last_score,
+                    zf is not None,
+                    forest.last_score,
+                    forest.last_threshold,
+                    ff is not None,
+                )
+            )
+    return out
 
 
 def load(conn: psycopg.Connection, symbol: str):
@@ -39,110 +73,135 @@ def load(conn: psycopg.Connection, symbol: str):
         " FROM features_1s WHERE symbol = %s ORDER BY time",
         (symbol,),
     ).fetchall()
-    feats = [Features(*r) for r in rows]
-    vecs = [(f.time, v) for f in feats if (v := vector(f)) is not None]
-    flags = conn.execute(
-        "SELECT time, detector, score, threshold, features FROM anomaly_flags"
-        " WHERE symbol = %s ORDER BY time",
-        (symbol,),
-    ).fetchall()
-    return vecs, flags
+    stored: dict[str, dict[datetime, dict]] = {"zscore": {}, "iforest": {}}
+    for t, det, feats in conn.execute(
+        "SELECT time, detector, features FROM anomaly_flags WHERE symbol = %s", (symbol,)
+    ):
+        stored[det][t] = feats
+    return [Features(*r) for r in rows], stored
 
 
-def pct_rank(column: np.ndarray, value: float) -> float:
-    return float((column < value).mean() * 100)
+def percentiles(matrix: np.ndarray, rows: list[Scored]) -> str:
+    if not rows:
+        return "n/a"
+    parts = []
+    for i, name in enumerate(FEATURE_NAMES):
+        ranks = [float((matrix[:, i] < r.x[i]).mean() * 100) for r in rows]
+        parts.append(f"{name} p{np.median(ranks):.0f}")
+    return ", ".join(parts)
 
 
-def fmt_vec(v: dict) -> str:
-    return ", ".join(f"{n}={v[n]:.3g}" for n in FEATURE_NAMES)
+def fmt(r: Scored) -> str:
+    vals = ", ".join(f"{n}={v:.3g}" for n, v in zip(FEATURE_NAMES, r.x, strict=True))
+    return f"{r.time:%H:%M:%S} z={r.z:.1f} forest={r.f:.3f} (thr {r.f_thr:.3f}): {vals}"
 
 
-def report_symbol(symbol: str, vecs, flags, out: list[str]) -> dict:
-    if len(vecs) <= FOREST_FIRST_SCORED:
-        out.append(
-            f"### {symbol}\n\nNot enough data: {len(vecs)} scoreable buckets, the forest "
-            f"needs {FOREST_FIRST_SCORED} before its first score.\n"
-        )
-        return {}
-    start, end = vecs[FOREST_FIRST_SCORED - 1][0], vecs[-1][0]
-    window = [(t, v) for t, v in vecs if t >= start]
-    matrix = np.array([v for _, v in window])
-    by_det: dict[str, dict] = {"zscore": {}, "iforest": {}}
-    for t, det, score, thr, feats in flags:
-        if t >= start:
-            by_det[det][t] = (score, thr, feats)
-    z, f = set(by_det["zscore"]), set(by_det["iforest"])
-    both, z_only, f_only = z & f, z - f, f - z
-    near = {t for t in z_only if any(abs(t - u) <= NEAR for u in f)}
-    hours = len(window) / 3600
-
+def report_symbol(symbol: str, scored: list[Scored], stored: dict, out: list) -> None:
     out.append(f"### {symbol}\n")
+    if not scored:
+        out.append("No seconds where both detectors could score yet.\n")
+        return
+    n = len(scored)
+    start, end = scored[0].time, scored[-1].time
+    matrix = np.array([r.x for r in scored])
+    hours = n / 3600
+
+    # Sanity check: the re-run must reproduce the pipeline's stored flags.
+    z_set = {r.time for r in scored if r.z_flag}
+    f_set = {r.time for r in scored if r.f_flag}
+    stored_z = {t for t in stored["zscore"] if start <= t <= end}
+    stored_f = {t for t in stored["iforest"] if start <= t <= end}
+    reproduced = z_set == stored_z and f_set == stored_f
     out.append(
-        f"Window where both detectors could flag: {start:%Y-%m-%d %H:%M:%S} to "
-        f"{end:%H:%M:%S} UTC, {len(window):,} scored buckets ({hours:.2f} h).\n"
-    )
-    out.append("| | z-score | Isolation Forest |\n|---|---:|---:|")
-    out.append(f"| flags | {len(z)} | {len(f)} |")
-    out.append(f"| per hour | {len(z) / hours:.1f} | {len(f) / hours:.1f} |")
-    out.append(f"| % of buckets | {len(z) / len(window):.3%} | {len(f) / len(window):.3%} |")
-    out.append(f"| flagged by both (same second) | {len(both)} | {len(both)} |")
-    out.append(f"| flagged only by this one | {len(z_only)} | {len(f_only)} |")
-    union = len(z | f)
-    jacc = len(both) / union if union else math.nan
-    out.append(
-        f"\nJaccard overlap (same second): **{jacc:.2f}**. "
-        f"{len(near)} of the {len(z_only)} z-only flags have a forest flag within "
-        f"+-2 s, so they are timing near-misses rather than real disagreement.\n"
+        f"{n:,} seconds where both detectors scored, {start:%Y-%m-%d %H:%M:%S} to "
+        f"{end:%H:%M:%S} UTC ({hours:.2f} h). Re-running the detectors reproduces "
+        f"the stored flags exactly: **{'yes' if reproduced else 'NO'}**.\n"
     )
 
+    out.append(
+        "**1. At production thresholds** (z-score: any |z| > 4; forest: above the "
+        "99.9th percentile of its own training scores)\n"
+    )
+    both, z_only, f_only = z_set & f_set, z_set - f_set, f_set - z_set
+    near = {t for t in z_only if any(abs(t - u) <= NEAR for u in f_set)}
+    out.append("| | z-score | Isolation Forest |\n|---|---:|---:|")
+    out.append(f"| flags | {len(z_set)} | {len(f_set)} |")
+    out.append(f"| per hour | {len(z_set) / hours:.1f} | {len(f_set) / hours:.1f} |")
+    out.append(f"| % of seconds | {len(z_set) / n:.2%} | {len(f_set) / n:.2%} |")
+    out.append(f"| also flagged by the other (same second) | {len(both)} | {len(both)} |")
+    out.append(f"| flagged only by this one | {len(z_only)} | {len(f_only)} |")
+    union = z_set | f_set
+    jaccard = f"{len(both) / len(union):.2f}" if union else "n/a"
+    out.append(
+        f"\nJaccard overlap: {jaccard}. Of the {len(z_only)} z-only flags, {len(near)} "
+        "have a forest flag within +-2 s.\n"
+    )
     drivers = Counter(
         max((k for k in feats if k.startswith("z_")), key=lambda k: abs(feats[k]))[2:]
-        for t, (_, _, feats) in by_det["zscore"].items()
+        for t, feats in stored["zscore"].items()
+        if start <= t <= end
     )
+    if drivers:
+        out.append(
+            "Feature with the largest |z| in each z-score flag: "
+            + ", ".join(f"{name} {c}" for name, c in drivers.most_common())
+            + ".\n"
+        )
+
+    out.append("**2. At matched alarm rates** (each detector's top-k seconds by score)\n")
+    out.append("| rate | k | top-k sets overlap | expected by chance |\n|---|---:|---:|---:|")
+    zs, fs = np.array([r.z for r in scored]), np.array([r.f for r in scored])
+    top1 = None
+    for rate in MATCHED_RATES:
+        k = max(1, math.ceil(rate * n))
+        z_top = set(np.argsort(-zs, kind="stable")[:k].tolist())
+        f_top = set(np.argsort(-fs, kind="stable")[:k].tolist())
+        if rate == 0.01:
+            top1 = (z_top, f_top)
+        out.append(f"| {rate:.1%} | {k} | {len(z_top & f_top) / k:.0%} | {k / n:.1%} |")
+    rho = spearmanr(zs, fs).statistic
     out.append(
-        "Feature with the largest |z| in each z-score flag: "
-        + ", ".join(f"{n} {c}" for n, c in drivers.most_common())
-        + ".\n"
+        f"\nSpearman rank correlation of the two scores over all {n:,} seconds: **{rho:.2f}**.\n"
     )
 
-    def percentile_profile(times: set) -> str:
-        if not times:
-            return "n/a"
-        vals = [by_det["zscore"].get(t) or by_det["iforest"].get(t) for t in times]
-        med = []
-        for i, name in enumerate(FEATURE_NAMES):
-            ranks = [pct_rank(matrix[:, i], v[2][name]) for v in vals]
-            med.append(f"{name} p{np.median(ranks):.0f}")
-        return ", ".join(med)
-
+    z_top, f_top = top1
     out.append(
-        "Median percentile of each feature (within this symbol's window) at flagged buckets:\n"
+        "Median feature percentile (within this symbol's window) among each detector's top 1%:\n"
     )
-    out.append(f"- both: {percentile_profile(both)}")
-    out.append(f"- z-score only: {percentile_profile(z_only)}")
-    out.append(f"- forest only: {percentile_profile(f_only)}\n")
+    out.append(f"- picked by both: {percentiles(matrix, [scored[i] for i in z_top & f_top])}")
+    out.append(f"- z-score only: {percentiles(matrix, [scored[i] for i in z_top - f_top])}")
+    out.append(f"- forest only: {percentiles(matrix, [scored[i] for i in f_top - z_top])}\n")
 
-    def examples(title: str, times: set, det: str, n: int = 5) -> None:
-        top = sorted(times, key=lambda t: -by_det[det][t][0])[:n]
-        out.append(f"{title} (top {len(top)} by {det} score):\n")
-        for t in top:
-            score, thr, feats = by_det[det][t]
-            out.append(f"- {t:%H:%M:%S} score {score:.2f} (threshold {thr:.2f}): {fmt_vec(feats)}")
+    def examples(title: str, idx: set, by: str) -> None:
+        rows = sorted((scored[i] for i in idx), key=lambda r: -getattr(r, by))[:5]
+        out.append(f"{title}:\n")
+        out.extend(f"- {fmt(r)}" for r in rows) if rows else out.append("- none")
         out.append("")
 
-    examples("Strongest z-score-only flags", z_only - near, "zscore")
-    examples("Strongest forest-only flags", f_only, "iforest")
-    examples("Strongest agreements", both, "iforest")
-    return {"z": len(z), "f": len(f), "both": len(both), "buckets": len(window)}
+    examples("Strongest top-1% picks by z-score only", z_top - f_top, "z")
+    examples("Strongest top-1% picks by the forest only", f_top - z_top, "f")
+    examples("Strongest agreements", z_top & f_top, "f")
 
 
 def main() -> None:
-    argparse.ArgumentParser(description=__doc__.splitlines()[0]).parse_args()
-    out = ["## Detector comparison\n"]
-    with psycopg.connect(load_settings().pg_dsn) as conn:
+    settings = load_settings()
+    commit = (
+        subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True
+        ).stdout.strip()
+        or "unknown"
+    )
+    out = [
+        "## Detector comparison (generated)\n",
+        f"Generated {datetime.now(UTC):%Y-%m-%d %H:%M} UTC by "
+        f"`analysis/compare_detectors.py` at commit `{commit}` from database "
+        f"`{settings.pg_db}`.\n",
+    ]
+    with psycopg.connect(settings.pg_dsn) as conn:
         symbols = [r[0] for r in conn.execute("SELECT DISTINCT symbol FROM features_1s ORDER BY 1")]
         for s in symbols:
-            report_symbol(s, *load(conn, s), out)
+            feats, stored = load(conn, s)
+            report_symbol(s, asyncio.run(rescore(feats)), stored, out)
     print("\n".join(out))
 
 
