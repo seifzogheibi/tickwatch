@@ -279,7 +279,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "tickwatch_queue_depth",
+          "expr": "max(tickwatch_queue_depth)",
           "legendFormat": "",
           "refId": "A",
           "instant": true,
@@ -565,7 +565,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "tickwatch_queue_depth",
+          "expr": "max(tickwatch_queue_depth)",
           "legendFormat": "queued",
           "refId": "queued"
         }
@@ -599,7 +599,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(tickwatch_rows_submitted_total[1m])",
+          "expr": "sum(rate(tickwatch_rows_submitted_total[1m]))",
           "legendFormat": "rows/s",
           "refId": "rows/s"
         }
@@ -633,7 +633,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "increase(tickwatch_disconnects_total[5m])",
+          "expr": "sum(increase(tickwatch_disconnects_total[5m]))",
           "legendFormat": "disconnects",
           "refId": "disconnects"
         },
@@ -642,7 +642,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "increase(tickwatch_reconnect_attempts_total[5m])",
+          "expr": "sum(increase(tickwatch_reconnect_attempts_total[5m]))",
           "legendFormat": "reconnect attempts",
           "refId": "reconnect attempts"
         },
@@ -660,7 +660,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "increase(tickwatch_parse_errors_total[5m])",
+          "expr": "sum(increase(tickwatch_parse_errors_total[5m]))",
           "legendFormat": "parse errors",
           "refId": "parse errors"
         }
