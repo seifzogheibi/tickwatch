@@ -38,9 +38,14 @@ _next_id = iter(range(1, 1000))
 def panel(kind: str, title: str, pos: tuple[int, int, int, int], targets: list[dict], *,
           unit: str = "short", description: str = "", thresholds: list | None = None,
           mappings: list | None = None, options: dict | None = None,
-          datasource: dict = PROM) -> dict:  # fmt: skip
+          datasource: dict = PROM, decimals: int | None = None,
+          no_value: str | None = None) -> dict:  # fmt: skip
     x, y, w, h = pos
     defaults: dict = {"unit": unit}
+    if decimals is not None:
+        defaults["decimals"] = decimals
+    if no_value is not None:
+        defaults["noValue"] = no_value
     if thresholds:
         defaults["thresholds"] = {"mode": "absolute", "steps": thresholds}
         defaults["color"] = {"mode": "thresholds"}
@@ -160,11 +165,13 @@ def build() -> dict:
         btc_mid := panel("timeseries", "BTCUSDT mid", (0, 30, 12, 8), [sql(
             """SELECT $__timeGroupAlias(time, $__interval, NULL), avg(mid) AS "BTCUSDT"
                FROM features_1s WHERE symbol = 'BTCUSDT' AND $__timeFilter(time)
-               GROUP BY 1 ORDER BY 1""")], unit="currencyUSD", datasource=TSDB),
+               GROUP BY 1 ORDER BY 1""")], unit="prefix:$", decimals=0, datasource=TSDB,
+              description="Red markers: Isolation Forest flags."),
         eth_mid := panel("timeseries", "ETHUSDT mid", (12, 30, 12, 8), [sql(
             """SELECT $__timeGroupAlias(time, $__interval, NULL), avg(mid) AS "ETHUSDT"
                FROM features_1s WHERE symbol = 'ETHUSDT' AND $__timeFilter(time)
-               GROUP BY 1 ORDER BY 1""")], unit="currencyUSD", datasource=TSDB),
+               GROUP BY 1 ORDER BY 1""")], unit="prefix:$", decimals=2, datasource=TSDB,
+              description="Red markers: Isolation Forest flags."),
         panel("timeseries", "Spread (bps, time-weighted)", (0, 38, 12, 8), [sql(
             """SELECT $__timeGroupAlias(time, $__interval, NULL), symbol AS metric,
                       max(spread_bps) AS value
@@ -181,7 +188,7 @@ def build() -> dict:
             """SELECT time, symbol, cause, missing_update_ids, prev_final_update_id,
                       first_update_id
                FROM depth_gaps WHERE $__timeFilter(time) ORDER BY time DESC LIMIT 100""",
-            fmt="table")], datasource=TSDB),
+            fmt="table")], datasource=TSDB, no_value="No gaps in range"),
     ]  # fmt: skip
     return {
         "uid": "tickwatch",
@@ -196,7 +203,10 @@ def build() -> dict:
         "annotations": {
             "list": [
                 {
-                    "name": "Anomaly flags",
+                    # Forest flags only: the z-score fires 60-85 times an hour
+                    # (docs/reports/2026-10-03-detector-comparison.md), which
+                    # turns the price panels into a solid wall of markers.
+                    "name": "Isolation Forest flags",
                     "datasource": TSDB,
                     "enable": True,
                     "iconColor": "rgba(255, 96, 96, 1)",
@@ -206,7 +216,8 @@ def build() -> dict:
                         """SELECT time, detector || ' ' || symbol || ' score '
                                   || round(score::numeric, 2) AS text,
                                   detector AS tags
-                           FROM anomaly_flags WHERE $__timeFilter(time)""",
+                           FROM anomaly_flags
+                           WHERE detector = 'iforest' AND $__timeFilter(time)""",
                         fmt="table",
                     ),
                 }

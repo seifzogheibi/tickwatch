@@ -16,7 +16,7 @@
   "annotations": {
     "list": [
       {
-        "name": "Anomaly flags",
+        "name": "Isolation Forest flags",
         "datasource": {
           "type": "grafana-postgresql-datasource",
           "uid": "timescaledb"
@@ -38,7 +38,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT time, detector || ' ' || symbol || ' score ' || round(score::numeric, 2) AS text, detector AS tags FROM anomaly_flags WHERE $__timeFilter(time)",
+          "rawSql": "SELECT time, detector || ' ' || symbol || ' score ' || round(score::numeric, 2) AS text, detector AS tags FROM anomaly_flags WHERE detector = 'iforest' AND $__timeFilter(time)",
           "refId": "A"
         }
       }
@@ -776,7 +776,7 @@
       "id": 17,
       "type": "timeseries",
       "title": "BTCUSDT mid",
-      "description": "",
+      "description": "Red markers: Isolation Forest flags.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "timescaledb"
@@ -802,7 +802,8 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD"
+          "unit": "prefix:$",
+          "decimals": 0
         },
         "overrides": []
       },
@@ -812,7 +813,7 @@
       "id": 18,
       "type": "timeseries",
       "title": "ETHUSDT mid",
-      "description": "",
+      "description": "Red markers: Isolation Forest flags.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "timescaledb"
@@ -838,7 +839,8 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD"
+          "unit": "prefix:$",
+          "decimals": 2
         },
         "overrides": []
       },
@@ -946,7 +948,8 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "short"
+          "unit": "short",
+          "noValue": "No gaps in range"
         },
         "overrides": []
       },
