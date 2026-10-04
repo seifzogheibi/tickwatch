@@ -7,10 +7,11 @@ replayed and operated: every performance number below comes from a script in
 the repo, and the raw stream is archived so any period can be reprocessed
 deterministically.
 
-**Status:** runs under Docker Compose on a development laptop; **not yet
-deployed to an always-on host**. The numbers in this README are from that
-machine (Apple M4 Pro, Docker Desktop), not from a server. See
-[What I'd do next](#what-id-do-next).
+**Status:** not running anywhere right now. It ran under Docker Compose on a
+development laptop from 2026-10-02 to 2026-10-03 and is **not deployed to an
+always-on host**; the numbers in this README are from that machine (Apple M4
+Pro, Docker Desktop), not from a server. To run it yourself, see
+[Getting it running](#getting-it-running) -- about five minutes.
 
 ![Grafana dashboard: last 3 hours to 04:15 UTC, 2026-10-03](docs/img/dashboard.png)
 
@@ -127,26 +128,92 @@ Scoring inside the container is slower than the same code measured directly
 on the host (0.043 ms and 1.7 ms); the percentiles above are interpolated
 within histogram buckets.
 
-## Running it
+## Getting it running
 
-Requires Docker with Compose v2.
+Everything runs in Docker: the database, the consumer, Prometheus and Grafana.
+You don't need Python installed unless you want to run the tests.
+
+**1. Install the prerequisites.** [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+(macOS/Windows) or Docker Engine with the Compose plugin (Linux), and git.
+Start Docker and check it works:
 
 ```bash
-cp .env.example .env    # then set PGPASSWORD, GRAFANA_ADMIN_PASSWORD, GRAFANA_DB_PASSWORD
+docker compose version
+```
+
+**2. Get the code.**
+
+```bash
+git clone https://github.com/seifzogheibi/tickwatch.git
+cd tickwatch
+```
+
+**3. Create `.env` with your own passwords.** This copies the template and
+fills the three passwords with random values (the file is gitignored):
+
+```bash
+sed -e "s/^PGPASSWORD=.*/PGPASSWORD=$(openssl rand -hex 16)/" \
+    -e "s/^GRAFANA_ADMIN_PASSWORD=.*/GRAFANA_ADMIN_PASSWORD=$(openssl rand -hex 12)/" \
+    -e "s/^GRAFANA_DB_PASSWORD=.*/GRAFANA_DB_PASSWORD=$(openssl rand -hex 16)/" \
+    .env.example > .env
+```
+
+**4. Start it.** The first run builds the image and downloads the others,
+which takes a few minutes:
+
+```bash
 docker compose up -d --build
 ```
 
-Grafana is at http://localhost:3000 (user `admin`, password from `.env`);
-Prometheus at http://localhost:9090. Everything binds to localhost only.
-Operations, replay and the planned VPS steps are in
+**5. Check it's working.** After about a minute all four services should be
+up and the consumer should say `healthy` (it's healthy once market data is
+arriving):
+
+```bash
+docker compose ps
+```
+
+**6. Open the dashboard** at http://localhost:3000. Log in as `admin` with the
+password from `.env`:
+
+```bash
+grep GRAFANA_ADMIN_PASSWORD .env
+```
+
+Charts fill in as data arrives. The Isolation Forest needs an hour of data
+before its first flag; the z-score starts after a minute.
+
+### Stopping and starting
+
+```bash
+docker compose stop        # stop everything; all data is kept
+docker compose start       # start again where it left off
+docker compose logs -f consumer   # watch the consumer's log
+```
+
+Data lives in Docker volumes and survives `stop`/`start` and reboots. Only
+`docker compose down -v` deletes it -- the database, the raw archive and the
+dashboards' history -- so don't add `-v` unless you mean to start from zero.
+
+Everything binds to localhost only. Prometheus is at http://localhost:9090.
+Replaying the archive, benchmarks and the planned VPS steps are in
 [`docs/deploy.md`](docs/deploy.md).
 
-Development:
+### Notes
+
+- **Binance availability:** the consumer connects to `stream.binance.com`,
+  which is blocked in some countries (including the US). If the consumer
+  never turns healthy, check `docker compose logs consumer` for connection
+  errors.
+- **A laptop sleeping stops collection.** The consumer reconnects on its own
+  when the machine wakes, but nothing is recorded while it sleeps.
+
+### Development
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest                      # 76 tests; 3 need the compose database
-.venv/bin/pytest -m "not integration" # unit tests only
+.venv/bin/pytest                      # 76 tests; 3 need the database from step 4
+.venv/bin/pytest -m "not integration" # unit tests only, no database needed
 .venv/bin/ruff check . && .venv/bin/ruff format --check .
 ```
 
